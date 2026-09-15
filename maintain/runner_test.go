@@ -198,3 +198,111 @@ func equal(got, want []string) bool {
 
 	return true
 }
+
+// TestRunnerSkipsTestsForInertChanges: most runs change only a README or a
+// Makefile, and those cannot alter what the tests do. A caller that says so
+// gets no test run for them, before the commit or after it.
+func TestRunnerSkipsTestsForInertChanges(t *testing.T) {
+	// inert is what a generator of documentation would supply.
+	inert := func(path string) bool {
+		return path == "README.md" || path == "Makefile" ||
+			strings.HasPrefix(path, "README/")
+	}
+
+	// touching makes a task that dirties the worktree, reporting the given
+	// files as changed.
+	touching := func(repo *fakeRepo, files ...string) Sequence {
+		return func(*Runner, Repo, Spec) []Task {
+			return []Task{{Name: "write", Run: func(context.Context) error {
+				repo.dirty = true
+				repo.changed = files
+
+				return nil
+			}}}
+		}
+	}
+
+	t.Run("only inert files: no test at all", func(t *testing.T) {
+		repo := &fakeRepo{coverage: 71.7}
+		r := &Runner{Inert: inert}
+
+		res := r.Update(t.Context(), repo, Spec{},
+			touching(repo, "README.md", "README/description.md"), nil)
+		if res.Err != nil {
+			t.Fatal(res.Err)
+		}
+
+		// One on the way in, and no more: nothing committed could have moved
+		// the figure.
+		if n := strings.Count(strings.Join(repo.calls, ","), "test"); n != 1 {
+			t.Errorf("tested %d times, want 1: %v", n, repo.calls)
+		}
+
+		if !res.Pushed {
+			t.Error("the inert change should still be committed and pushed")
+		}
+
+		if res.Coverage != 71.7 {
+			t.Errorf("Coverage = %v, want the figure from the way in", res.Coverage)
+		}
+	})
+
+	t.Run("a Go file among them: tested", func(t *testing.T) {
+		repo := &fakeRepo{coverage: 88.1}
+		r := &Runner{Inert: inert}
+
+		if res := r.Update(t.Context(), repo, Spec{},
+			touching(repo, "README.md", "thing.go"), nil); res.Err != nil {
+			t.Fatal(res.Err)
+		}
+
+		if n := strings.Count(strings.Join(repo.calls, ","), "test"); n != 3 {
+			t.Errorf("tested %d times, want 3: %v", n, repo.calls)
+		}
+	})
+
+	t.Run("a file nobody claims: tested", func(t *testing.T) {
+		repo := &fakeRepo{coverage: 50}
+		r := &Runner{Inert: inert}
+
+		if res := r.Update(t.Context(), repo, Spec{},
+			touching(repo, "assets/banner.png"), nil); res.Err != nil {
+			t.Fatal(res.Err)
+		}
+
+		if n := strings.Count(strings.Join(repo.calls, ","), "test"); n != 3 {
+			t.Errorf("tested %d times, want 3 — an unclaimed file could be embedded: %v",
+				n, repo.calls)
+		}
+	})
+
+	// A repository whose own tests run the linter can be moved by anything the
+	// linter reads, so nothing there is inert.
+	t.Run("LintInTests: nothing is inert", func(t *testing.T) {
+		repo := &fakeRepo{coverage: 50}
+		r := &Runner{Inert: inert}
+
+		if res := r.Update(t.Context(), repo, Spec{LintInTests: true},
+			touching(repo, "README.md"), nil); res.Err != nil {
+			t.Fatal(res.Err)
+		}
+
+		if n := strings.Count(strings.Join(repo.calls, ","), "test"); n != 3 {
+			t.Errorf("tested %d times, want 3: %v", n, repo.calls)
+		}
+	})
+
+	// Without a predicate the runner cannot know, so it tests as it always did.
+	t.Run("no predicate: tested", func(t *testing.T) {
+		repo := &fakeRepo{coverage: 50}
+
+		if res := (&Runner{}).Update(t.Context(), repo, Spec{},
+			touching(repo, "README.md"), nil); res.Err != nil {
+			t.Fatal(res.Err)
+		}
+
+		if n := strings.Count(strings.Join(repo.calls, ","), "test"); n != 3 {
+			t.Errorf("tested %d times, want 3: %v", n, repo.calls)
+		}
+	})
+}

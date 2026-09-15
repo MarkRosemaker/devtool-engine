@@ -73,6 +73,17 @@ type Sequence func(r *Runner, repo Repo, spec Spec) []Task
 // the goroutines maintaining different repositories: the serialisation it
 // provides is only meaningful across a single instance.
 type Runner struct {
+	// Inert reports that a change to this path cannot alter what the tests
+	// do, so a task that only touched such files need not be tested before it
+	// is committed and need not send the run back to measure coverage again.
+	//
+	// The caller supplies it because only the caller knows what it writes:
+	// a README, a Makefile and a set of documentation fragments are inert in
+	// most repositories and embedded in some. Left nil, nothing is inert and
+	// every change is tested, which is the safe reading and was the only one
+	// before this existed.
+	Inert func(path string) bool
+
 	// lint serialises everything that shells out to golangci-lint. The linter
 	// is memory-hungry and does its own parallelism, so a second concurrent
 	// invocation slows both down rather than finishing sooner.
@@ -164,8 +175,12 @@ func (r *Runner) update(
 		return fmt.Errorf("testing before any changes: %w", err)
 	}
 
+	// Whether anything committed could have moved the coverage figure. A run
+	// that only rewrote a README has not.
+	var moved bool
+
 	for _, task := range seq(r, repo, spec) {
-		committed, err := r.apply(ctx, repo, spec, task, events)
+		committed, relevant, err := r.apply(ctx, repo, spec, task, events)
 		if err != nil {
 			return err
 		}
@@ -173,6 +188,8 @@ func (r *Runner) update(
 		if committed {
 			res.Commits = append(res.Commits, task.label())
 		}
+
+		moved = moved || relevant
 	}
 
 	if len(res.Commits) > 0 {
@@ -186,11 +203,12 @@ func (r *Runner) update(
 			"repo", repo.String(), "commits", res.Commits)
 	}
 
-	// A repository where nothing was committed is the same code the run tested
-	// on the way in, so measuring it again would run the whole suite to arrive
-	// at the figure already in hand. Most repositories are quiet most runs,
-	// and this is the difference between two test runs each and one.
-	if len(res.Commits) > 0 {
+	// The figure measured on the way in still stands unless something
+	// committed could have moved it. A run that changed nothing, or changed
+	// only files the caller calls inert, has the same code it tested going in
+	// — and measuring again would run the whole suite to arrive at a number
+	// already in hand.
+	if moved {
 		if coverage, err = r.TestCover(ctx, repo, spec); err != nil {
 			return fmt.Errorf("measuring coverage: %w", err)
 		}
@@ -244,32 +262,37 @@ func (r *Runner) prepare(ctx context.Context, repo Repo, spec Spec) error {
 // case once a repository is in good shape.
 func (r *Runner) apply(
 	ctx context.Context, repo Repo, spec Spec, task Task, events Emitter,
-) (bool, error) {
+) (committed, relevant bool, err error) {
 	Emit(events, Event{Kind: TaskStart, Repo: repo.String(), Task: task.label()})
 
 	if err := task.Run(ctx); err != nil {
-		return false, fmt.Errorf("%s: %w", task.Name, err)
+		return false, false, fmt.Errorf("%s: %w", task.Name, err)
 	}
 
 	files, err := repo.GetChangedFiles()
 	if err != nil {
-		return false, fmt.Errorf("%s: getting changed files: %w", task.Name, err)
+		return false, false, fmt.Errorf("%s: getting changed files: %w", task.Name, err)
 	}
 
 	if len(files) == 0 {
 		Emit(events, Event{Kind: TaskDone, Repo: repo.String(), Task: task.label()})
 
-		return false, nil
+		return false, false, nil
 	}
 
+	relevant = r.relevant(spec, files)
+
 	// Test before committing, so a task that breaks the build is reported
-	// against that task and its damage is never pushed.
-	if _, err := r.TestCover(ctx, repo, spec); err != nil {
-		return false, fmt.Errorf("%s: testing after changes: %w", task.Name, err)
+	// against that task and its damage is never pushed. A task that rewrote
+	// only inert files has nothing to break.
+	if relevant {
+		if _, err := r.TestCover(ctx, repo, spec); err != nil {
+			return false, false, fmt.Errorf("%s: testing after changes: %w", task.Name, err)
+		}
 	}
 
 	if err := repo.CommitAll(task.Name); err != nil {
-		return false, fmt.Errorf("%s: committing: %w", task.Name, err)
+		return false, false, fmt.Errorf("%s: committing: %w", task.Name, err)
 	}
 
 	slog.InfoContext(ctx, "committed",
@@ -279,5 +302,24 @@ func (r *Runner) apply(
 		Kind: TaskDone, Repo: repo.String(), Task: task.label(), Committed: true,
 	})
 
-	return true, nil
+	return true, relevant, nil
+}
+
+// relevant reports whether a set of changed files is worth testing over.
+//
+// A repository whose own test suite runs the linter is the exception with no
+// exceptions: the linter reads configuration, documentation and whatever else
+// it is pointed at, so nothing there can be called inert.
+func (r *Runner) relevant(spec Spec, files []string) bool {
+	if r.Inert == nil || spec.LintInTests {
+		return true
+	}
+
+	for _, path := range files {
+		if !r.Inert(path) {
+			return true
+		}
+	}
+
+	return false
 }
