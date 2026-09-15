@@ -268,14 +268,24 @@ func TestBoardFromEventStreamGolden(t *testing.T) {
 
 	defer func() { _ = f.Close() }()
 
-	board := NewBoard([]Result{
-		{Owner: "user", Name: "alpha"},
-		{Owner: "user", Name: "beta"},
-		{Owner: "user", Name: "gamma"},
-	})
+	// Built from the stream alone, the way a reporter in another process has
+	// to: it is told the rows by RunStart and knows nothing else going in.
+	var board *Board
 
-	if err := ReadEvents(f, board.Apply); err != nil {
+	if err := ReadEvents(f, func(ev Event) {
+		if ev.Kind == RunStart {
+			board = NewBoardFor(ev.Repos)
+
+			return
+		}
+
+		board.Apply(ev)
+	}); err != nil {
 		t.Fatal(err)
+	}
+
+	if board == nil {
+		t.Fatal("the stream carried no run_start, so no table could be built")
 	}
 
 	got := []byte(board.Render())
@@ -297,5 +307,67 @@ func TestBoardFromEventStreamGolden(t *testing.T) {
 	if string(got) != string(wantBytes) {
 		t.Errorf("%s does not match:\n--- got ---\n%s\n--- want ---\n%s",
 			golden, got, wantBytes)
+	}
+}
+
+// TestNewBoardFor covers what a reporter gets handed: a list of keys off the
+// wire, including whatever a malformed line puts in it.
+func TestNewBoardFor(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		keys []string
+		want int
+	}{
+		{"none", nil, 0},
+		{"two", []string{"user/alpha", "user/beta"}, 2},
+		{"a key with no slash is skipped", []string{"user/alpha", "nope"}, 1},
+		{"an empty owner is skipped", []string{"/beta", "user/alpha"}, 1},
+		{"an empty name is skipped", []string{"user/", "user/alpha"}, 1},
+		{"a second slash is skipped", []string{"user/a/b", "user/alpha"}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := len(NewBoardFor(tc.keys).Results()); got != tc.want {
+				t.Errorf("got %d rows, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRunStartCarriesEveryRepo is the property the table depends on: a
+// reporter that has only the stream can name every repository the run
+// touched before any of them finishes.
+func TestRunStartCarriesEveryRepo(t *testing.T) {
+	f, err := os.Open("testdata/run.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	defer func() { _ = f.Close() }()
+
+	var announced []string
+
+	mentioned := map[string]bool{}
+
+	if err := ReadEvents(f, func(ev Event) {
+		if ev.Kind == RunStart {
+			announced = ev.Repos
+		}
+
+		if ev.Repo != "" {
+			mentioned[ev.Repo] = true
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	known := map[string]bool{}
+	for _, key := range announced {
+		known[key] = true
+	}
+
+	for repo := range mentioned {
+		if !known[repo] {
+			t.Errorf("%q appears in the stream but run_start did not announce it", repo)
+		}
 	}
 }

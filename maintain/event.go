@@ -48,6 +48,15 @@ type Event struct {
 	// Repo is "owner/name", empty on the events that bracket a whole run.
 	Repo string `json:"repo,omitempty"`
 
+	// Repos is every repository the run covers, as "owner/name", in the order
+	// they should be reported. Set on RunStart and nowhere else.
+	//
+	// It is what lets a reporter in another process draw the table: a board
+	// shows a fixed set of rows and ignores a repository it was not told
+	// about, so without this a reader of the stream has nothing to build one
+	// from until the first repository has already finished.
+	Repos []string `json:"repos,omitempty"`
+
 	// Task is the task's short label, set on TaskStart and TaskDone.
 	Task string `json:"task,omitempty"`
 

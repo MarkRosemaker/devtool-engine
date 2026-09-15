@@ -13,10 +13,17 @@ import (
 func Key(owner, name string) string { return owner + "/" + name }
 
 // splitKey is Key's inverse, for reading a repository back off an [Event].
+//
+// It rejects what Key could never have produced — a missing half, or a second
+// slash — because an event can arrive from another process, where the key is
+// whatever that process wrote rather than something this package built.
 func splitKey(key string) (owner, name string, ok bool) {
 	owner, name, ok = strings.Cut(key, "/")
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return "", "", false
+	}
 
-	return owner, name, ok
+	return owner, name, true
 }
 
 // ErrRemote marks a failure that reached us as text rather than as an error:
@@ -160,6 +167,27 @@ func NewBoard(repos []Result) *Board {
 	}
 
 	return b
+}
+
+// NewBoardFor creates a board from the keys a [RunStart] event carries, which
+// is how a process that did not perform the run gets its rows.
+//
+// A key that is not "owner/name" is skipped rather than rendered as a broken
+// row: the stream is another process's output, and a reporter that dies on a
+// malformed line reports nothing at all.
+func NewBoardFor(keys []string) *Board {
+	repos := make([]Result, 0, len(keys))
+
+	for _, key := range keys {
+		owner, name, ok := splitKey(key)
+		if !ok {
+			continue
+		}
+
+		repos = append(repos, Result{Owner: owner, Name: name})
+	}
+
+	return NewBoard(repos)
 }
 
 // Set records a repository's result, replacing its pending row.
