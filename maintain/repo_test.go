@@ -24,6 +24,10 @@ type fakeRepo struct {
 
 	coverage float64
 
+	// changed is what GetChangedFiles reports while the worktree is dirty,
+	// so a test can say which files a task touched and not only that it did.
+	changed []string
+
 	// calls records every method with an effect, in the order it was called.
 	calls []string
 }
@@ -97,6 +101,10 @@ func (r *fakeRepo) SetTopics(context.Context, []string) error {
 func (r *fakeRepo) GetChangedFiles() ([]string, error) {
 	if !r.dirty {
 		return nil, nil
+	}
+
+	if r.changed != nil {
+		return r.changed, nil
 	}
 
 	return []string{"changed.go"}, nil
