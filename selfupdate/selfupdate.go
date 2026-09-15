@@ -198,27 +198,48 @@ func (u *Updater) install(ctx context.Context, version string) error {
 // module when a stale answer is not acceptable.
 //
 // GONOPROXY and GONOSUMDB name the module rather than GOPROXY naming nothing:
-// the bypass has to be narrow, or the toolchain download goes direct with it.
-// Both are appended to whatever the machine already sets, so a configuration
-// that already covers this module is widened rather than replaced.
+// the bypass has to be narrow, or the toolchain download goes direct with it,
+// and that is served by the proxy.
 func (u *Updater) env() []string {
 	env := append(os.Environ(), "GO111MODULE=on")
 
 	if u.Direct {
 		env = append(env,
-			"GONOPROXY="+prepend(os.Getenv("GONOPROXY"), u.Module),
-			"GONOSUMDB="+prepend(os.Getenv("GONOSUMDB"), u.Module),
+			"GONOPROXY="+prepend(patterns("GONOPROXY"), u.Module),
+			"GONOSUMDB="+prepend(patterns("GONOSUMDB"), u.Module),
 		)
 	}
 
 	return env
 }
 
+// patterns is the effective value of one of the bypass variables.
+//
+// Setting GONOPROXY or GONOSUMDB *overrides* GOPRIVATE rather than adding to
+// it, so writing either without carrying GOPRIVATE across silently turns the
+// bypass off for everything else the machine calls private. That is not
+// hypothetical: it left this module exempt while its own private dependency
+// was not, and the install failed trying to verify that dependency against the
+// public checksum database.
+func patterns(key string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+
+	return os.Getenv("GOPRIVATE")
+}
+
 // prepend puts module at the front of a comma-separated pattern list, leaving
-// an empty list as just the module.
+// an empty list as just the module and not repeating a module already in it.
 func prepend(list, module string) string {
 	if list == "" {
 		return module
+	}
+
+	for _, p := range strings.Split(list, ",") {
+		if p == module {
+			return list
+		}
 	}
 
 	return module + "," + list

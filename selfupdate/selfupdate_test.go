@@ -137,3 +137,43 @@ func TestStderrOfCarriesTheMessage(t *testing.T) {
 		t.Errorf("the message was lost: %q", got)
 	}
 }
+
+// TestDirectKeepsTheMachinesPrivatePatterns is the bug that broke a real
+// install: GONOPROXY and GONOSUMDB override GOPRIVATE rather than adding to
+// it, so naming only this module turned the bypass off for the private
+// dependency this module has, and the install failed verifying it against the
+// public checksum database.
+func TestDirectKeepsTheMachinesPrivatePatterns(t *testing.T) {
+	t.Setenv("GOPRIVATE", "github.com/acme/*")
+	t.Setenv("GONOPROXY", "")
+	t.Setenv("GONOSUMDB", "")
+
+	got := strings.Join((&Updater{Module: "github.com/acme/tool", Direct: true}).env(), " ")
+
+	for _, want := range []string{
+		"GONOPROXY=github.com/acme/tool,github.com/acme/*",
+		"GONOSUMDB=github.com/acme/tool,github.com/acme/*",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("want %s in:\n%s", want, got)
+		}
+	}
+}
+
+// TestDirectPrefersAnExplicitBypass: where the machine set GONOPROXY itself,
+// that is what is widened, not GOPRIVATE.
+func TestDirectPrefersAnExplicitBypass(t *testing.T) {
+	t.Setenv("GOPRIVATE", "github.com/acme/*")
+	t.Setenv("GONOPROXY", "github.com/other/*")
+
+	got := strings.Join((&Updater{Module: "github.com/acme/tool", Direct: true}).env(), " ")
+	if !strings.Contains(got, "GONOPROXY=github.com/acme/tool,github.com/other/*") {
+		t.Errorf("an explicit GONOPROXY was not carried across:\n%s", got)
+	}
+}
+
+func TestPrependDoesNotRepeat(t *testing.T) {
+	if got := prepend("a,example.com/tool,b", "example.com/tool"); got != "a,example.com/tool,b" {
+		t.Errorf("the module was added twice: %q", got)
+	}
+}
