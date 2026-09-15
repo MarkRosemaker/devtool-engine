@@ -184,7 +184,10 @@ func (u *Updater) install(ctx context.Context, version string) error {
 	cmd := exec.CommandContext(ctx, "go", "install", u.Module+"@"+version)
 	cmd.Env = u.env()
 
-	if err := cmd.Run(); err != nil {
+	// Output rather than Run: an ExitError only carries stderr when the
+	// command was run this way, and "exit status 1" on its own says nothing
+	// about why an install failed.
+	if _, err := cmd.Output(); err != nil {
 		return fmt.Errorf("installing %s@%s: %w", u.Module, version, stderrOf(err))
 	}
 

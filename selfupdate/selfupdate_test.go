@@ -1,6 +1,7 @@
 package selfupdate
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -119,5 +120,20 @@ func TestPrepend(t *testing.T) {
 func TestLatestNeedsAModule(t *testing.T) {
 	if _, err := (&Updater{}).Latest(t.Context()); err == nil {
 		t.Error("resolving with no module reported success")
+	}
+}
+
+// TestStderrOfCarriesTheMessage: an install that fails reports "exit status 1"
+// and nothing else unless the command's stderr is captured and attached.
+func TestStderrOfCarriesTheMessage(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", "echo something went wrong >&2; exit 1")
+
+	_, err := cmd.Output()
+	if err == nil {
+		t.Fatal("the command was expected to fail")
+	}
+
+	if got := stderrOf(err).Error(); !strings.Contains(got, "something went wrong") {
+		t.Errorf("the message was lost: %q", got)
 	}
 }
