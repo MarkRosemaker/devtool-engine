@@ -46,13 +46,19 @@ type Updater struct {
 	// somebody's local build with a published one.
 	Current string
 
-	// Direct asks the toolchain to skip the module proxy when resolving the
-	// latest version.
+	// Direct asks the toolchain to skip the module proxy for this module when
+	// resolving its latest version.
 	//
 	// Worth setting wherever a change is expected to take effect promptly:
 	// proxy.golang.org caches its answer to "what is the latest version", so
 	// for some minutes after a push it goes on reporting the version before
 	// it. Going direct asks the repository itself and costs a git operation.
+	//
+	// It is scoped to this module rather than set as GOPROXY=direct, which
+	// would send everything else direct too — including the toolchain
+	// download that "go install" starts when the module needs a newer Go than
+	// the one running. That comes from the proxy, and a machine that cannot
+	// reach go.dev fails the install outright.
 	Direct bool
 }
 
@@ -185,15 +191,34 @@ func (u *Updater) install(ctx context.Context, version string) error {
 	return nil
 }
 
-// env is the environment for the toolchain, with the module proxy disabled
-// when a stale answer is not acceptable.
+// env is the environment for the toolchain, bypassing the proxy for this one
+// module when a stale answer is not acceptable.
+//
+// GONOPROXY and GONOSUMDB name the module rather than GOPROXY naming nothing:
+// the bypass has to be narrow, or the toolchain download goes direct with it.
+// Both are appended to whatever the machine already sets, so a configuration
+// that already covers this module is widened rather than replaced.
 func (u *Updater) env() []string {
 	env := append(os.Environ(), "GO111MODULE=on")
+
 	if u.Direct {
-		env = append(env, "GOPROXY=direct")
+		env = append(env,
+			"GONOPROXY="+prepend(os.Getenv("GONOPROXY"), u.Module),
+			"GONOSUMDB="+prepend(os.Getenv("GONOSUMDB"), u.Module),
+		)
 	}
 
 	return env
+}
+
+// prepend puts module at the front of a comma-separated pattern list, leaving
+// an empty list as just the module.
+func prepend(list, module string) string {
+	if list == "" {
+		return module
+	}
+
+	return module + "," + list
 }
 
 // shadowing returns a binary that would run instead of the one just installed.

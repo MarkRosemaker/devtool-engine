@@ -80,12 +80,37 @@ func TestVersionOfThisTest(t *testing.T) {
 }
 
 func TestEnvGoesDirectOnlyWhenAsked(t *testing.T) {
-	if got := strings.Join((&Updater{}).env(), " "); strings.Contains(got, "GOPROXY=direct") {
-		t.Error("went direct without being asked")
+	if got := strings.Join((&Updater{}).env(), " "); strings.Contains(got, "GONOPROXY=") {
+		t.Error("bypassed the proxy without being asked")
 	}
 
-	if got := strings.Join((&Updater{Direct: true}).env(), " "); !strings.Contains(got, "GOPROXY=direct") {
-		t.Error("Direct did not disable the proxy")
+	got := strings.Join((&Updater{Module: "example.com/tool", Direct: true}).env(), " ")
+
+	for _, want := range []string{
+		"GONOPROXY=example.com/tool",
+		"GONOSUMDB=example.com/tool",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Direct did not set %s", want)
+		}
+	}
+
+	// GOPROXY=direct would take the toolchain download direct with it, and
+	// that is served by the proxy: a machine that cannot reach go.dev then
+	// fails the install outright. Measured, not supposed.
+	if strings.Contains(got, "GOPROXY=direct") {
+		t.Error("Direct set GOPROXY, which also diverts the toolchain download")
+	}
+}
+
+func TestPrepend(t *testing.T) {
+	for _, tc := range []struct{ list, want string }{
+		{"", "example.com/tool"},
+		{"other.example/*", "example.com/tool,other.example/*"},
+	} {
+		if got := prepend(tc.list, "example.com/tool"); got != tc.want {
+			t.Errorf("prepend(%q) = %q, want %q", tc.list, got, tc.want)
+		}
 	}
 }
 
