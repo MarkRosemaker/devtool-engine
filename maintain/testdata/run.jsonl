@@ -1,0 +1,14 @@
+{"kind":"run_start","ts":"2026-09-14T18:00:00Z"}
+{"kind":"repo_start","ts":"2026-09-14T18:00:01Z","repo":"user/alpha"}
+{"kind":"repo_start","ts":"2026-09-14T18:00:01Z","repo":"user/beta"}
+{"kind":"task_start","ts":"2026-09-14T18:00:02Z","repo":"user/alpha","task":"readme"}
+{"kind":"task_done","ts":"2026-09-14T18:00:04Z","repo":"user/alpha","task":"readme","committed":true}
+{"kind":"task_start","ts":"2026-09-14T18:00:04Z","repo":"user/beta","task":"readme"}
+{"kind":"task_done","ts":"2026-09-14T18:00:05Z","repo":"user/beta","task":"readme"}
+{"kind":"task_start","ts":"2026-09-14T18:00:05Z","repo":"user/alpha","task":"vet"}
+{"kind":"task_done","ts":"2026-09-14T18:00:07Z","repo":"user/alpha","task":"vet","committed":true}
+{"kind":"repo_done","ts":"2026-09-14T18:00:08Z","repo":"user/alpha","coverage":96.4,"prevCoverage":90,"commits":["readme","vet"],"pushed":true}
+{"kind":"repo_done","ts":"2026-09-14T18:00:09Z","repo":"user/beta","coverage":71.7,"prevCoverage":71.7}
+{"kind":"repo_start","ts":"2026-09-14T18:00:09Z","repo":"user/gamma"}
+{"kind":"repo_done","ts":"2026-09-14T18:00:12Z","repo":"user/gamma","err":"pulling latest changes: timeout"}
+{"kind":"run_done","ts":"2026-09-14T18:00:12Z"}

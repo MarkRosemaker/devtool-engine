@@ -1,0 +1,5 @@
+<pre>Repo   Coverage  Notes
+alpha  96.4%     readme, vet → pushed (+6.4%)
+beta   71.7%     —
+gamma  —         ERR: pulling latest changes: timeout
+</pre>
