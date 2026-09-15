@@ -159,7 +159,8 @@ func (r *Runner) update(
 
 	// Establish that the repository is healthy before changing anything, so a
 	// pre-existing failure is not reported against the first task that runs.
-	if _, err := r.TestCover(ctx, repo, spec); err != nil {
+	coverage, err := r.TestCover(ctx, repo, spec)
+	if err != nil {
 		return fmt.Errorf("testing before any changes: %w", err)
 	}
 
@@ -185,9 +186,14 @@ func (r *Runner) update(
 			"repo", repo.String(), "commits", res.Commits)
 	}
 
-	coverage, err := r.TestCover(ctx, repo, spec)
-	if err != nil {
-		return fmt.Errorf("measuring coverage: %w", err)
+	// A repository where nothing was committed is the same code the run tested
+	// on the way in, so measuring it again would run the whole suite to arrive
+	// at the figure already in hand. Most repositories are quiet most runs,
+	// and this is the difference between two test runs each and one.
+	if len(res.Commits) > 0 {
+		if coverage, err = r.TestCover(ctx, repo, spec); err != nil {
+			return fmt.Errorf("measuring coverage: %w", err)
+		}
 	}
 
 	res.Coverage = coverage

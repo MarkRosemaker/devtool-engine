@@ -102,6 +102,9 @@ func TestRunnerUpdate(t *testing.T) {
 
 	// The worktree an interrupted earlier run left behind is cleaned before
 	// anything else, rather than being committed as though this run did it.
+	//
+	// It also fixes the quiet case: nothing was committed, so the one test on
+	// the way in is the only one there is.
 	t.Run("changes left over from before are discarded first", func(t *testing.T) {
 		repo := &fakeRepo{dirty: true}
 
@@ -110,9 +113,58 @@ func TestRunnerUpdate(t *testing.T) {
 			t.Fatal(res.Err)
 		}
 
-		want := "description,topics,reset,clean,pull,test,test"
+		want := "description,topics,reset,clean,pull,test"
 		if got := strings.Join(repo.calls, ","); got != want {
 			t.Errorf("calls =\n  %s\nwant\n  %s", got, want)
+		}
+	})
+}
+
+// TestRunnerTestsOnceWhenNothingChanges is the difference between one test run
+// per repository and two. A repository where no task committed is the same
+// code the run tested on its way in, so measuring coverage again would run the
+// whole suite to arrive at the figure already in hand — and most repositories
+// are quiet most runs.
+func TestRunnerTestsOnceWhenNothingChanges(t *testing.T) {
+	t.Run("nothing changed", func(t *testing.T) {
+		repo := &fakeRepo{coverage: 71.7}
+
+		res := (&Runner{}).Update(t.Context(), repo, Spec{},
+			noopTasks("readme", "makefile"), nil)
+		if res.Err != nil {
+			t.Fatal(res.Err)
+		}
+
+		if n := strings.Count(strings.Join(repo.calls, ","), "test"); n != 1 {
+			t.Errorf("tested %d times, want 1: %v", n, repo.calls)
+		}
+
+		// The figure still has to be reported, from the run on the way in.
+		if res.Coverage != 71.7 {
+			t.Errorf("Coverage = %v, want the figure measured on the way in", res.Coverage)
+		}
+	})
+
+	// Something was committed, so the code at the end is not the code tested
+	// on the way in and the figure has to be measured again.
+	t.Run("something changed", func(t *testing.T) {
+		repo := &fakeRepo{coverage: 88.1}
+
+		res := (&Runner{}).Update(t.Context(), repo, Spec{},
+			func(*Runner, Repo, Spec) []Task {
+				return []Task{{Name: "readme", Run: func(context.Context) error {
+					repo.dirty = true
+
+					return nil
+				}}}
+			}, nil)
+		if res.Err != nil {
+			t.Fatal(res.Err)
+		}
+
+		if n := strings.Count(strings.Join(repo.calls, ","), "test"); n != 3 {
+			t.Errorf("tested %d times, want 3 (in, after the task, at the end): %v",
+				n, repo.calls)
 		}
 	})
 }
