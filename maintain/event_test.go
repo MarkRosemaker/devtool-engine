@@ -4,15 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"flag"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
-)
 
-var update = flag.Bool("update", false, "rewrite the testdata golden files")
+	"github.com/MarkRosemaker/devtool-engine/event"
+)
 
 // recorder is an [Emitter] keeping what it was sent.
 type recorder struct {
@@ -150,13 +147,13 @@ func TestEventsRoundTrip(t *testing.T) {
 	}
 
 	(&Runner{}).Update(t.Context(), repo, Spec{Coverage: 80}, seq,
-		NewJSONLEmitter(buf))
+		event.Write(buf))
 
 	// One object per line, so a person can read a run off a terminal.
 	lines := strings.Count(strings.TrimSuffix(buf.String(), "\n"), "\n") + 1
 
 	var got []Event
-	if err := ReadEvents(buf, func(ev Event) { got = append(got, ev) }); err != nil {
+	if err := event.Read(buf, func(ev Event) { got = append(got, ev) }); err != nil {
 		t.Fatal(err)
 	}
 
@@ -171,203 +168,5 @@ func TestEventsRoundTrip(t *testing.T) {
 
 	if !done.Pushed || len(done.Commits) != 1 || done.Commits[0] != "readme" {
 		t.Errorf("commits did not survive the trip: %+v", done)
-	}
-}
-
-// A failure off the wire renders as the run stated it, and is still
-// identifiable as having come from there. Both halves matter: the first keeps
-// the table's limited room for the message, the second lets a consumer tell a
-// reported failure from one raised locally.
-func TestRemoteErrorKeepsItsMessage(t *testing.T) {
-	res := Event{
-		Kind: RepoDone, Repo: "user/gorepo",
-		Err: "pulling latest changes: timeout",
-	}.Result()
-
-	if got := res.Err.Error(); got != "pulling latest changes: timeout" {
-		t.Errorf("Error() = %q, want the message verbatim", got)
-	}
-
-	if !errors.Is(res.Err, ErrRemote) {
-		t.Error("want errors.Is(err, ErrRemote) to hold")
-	}
-
-	if got := res.notes(); !strings.HasPrefix(got, "ERR: pulling") {
-		t.Errorf("notes() = %q, want no provenance in the table", got)
-	}
-}
-
-func TestReadEventsRejectsGarbage(t *testing.T) {
-	err := ReadEvents(strings.NewReader("{\"kind\":\"repo_start\"}\nnot json\n"),
-		func(Event) {})
-	if err == nil {
-		t.Fatal("expected an error for a line that is not an event")
-	}
-}
-
-// TestBoardFromEventsMatchesResults is the acceptance check for making the
-// table event-driven: for the same run, a board fed events renders exactly
-// what a board fed results renders.
-//
-// Byte-identical, because the point of this change was to move where the
-// table's inputs come from without changing the table.
-func TestBoardFromEventsMatchesResults(t *testing.T) {
-	rows := []Result{
-		{Owner: "user", Name: "alpha"},
-		{Owner: "user", Name: "beta"},
-		{Owner: "user", Name: "gamma"},
-	}
-
-	results := []Result{
-		{
-			Owner: "user", Name: "alpha", Coverage: 96.4, PrevCoverage: 90,
-			Commits: []string{"readme", "vet"}, Pushed: true,
-		},
-		{Owner: "user", Name: "beta", Coverage: 71.7, PrevCoverage: 71.7},
-		{Owner: "user", Name: "gamma", Err: errors.New("pulling latest changes: timeout")},
-	}
-
-	fromResults := NewBoard(rows)
-	for _, res := range results {
-		fromResults.Set(res)
-	}
-
-	fromEvents := NewBoard(rows)
-
-	for _, res := range results {
-		ev := Event{
-			Kind: RepoDone, Repo: res.Key(),
-			Coverage: res.Coverage, PrevCoverage: res.PrevCoverage,
-			Commits: res.Commits, Pushed: res.Pushed,
-		}
-
-		if res.Err != nil {
-			ev.Err = res.Err.Error()
-		}
-
-		fromEvents.Apply(ev)
-	}
-
-	got, want := fromEvents.Render(), fromResults.Render()
-	if got != want {
-		t.Errorf("the event-driven table differs:\n--- events ---\n%s\n--- results ---\n%s",
-			got, want)
-	}
-}
-
-// TestBoardFromEventStreamGolden renders a recorded stream, so a change to
-// either the event contract or the table is a reviewable diff. Run
-// "go test ./maintain -update" to rewrite it.
-func TestBoardFromEventStreamGolden(t *testing.T) {
-	const stream = "testdata/run.jsonl"
-
-	f, err := os.Open(stream)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	defer func() { _ = f.Close() }()
-
-	// Built from the stream alone, the way a reporter in another process has
-	// to: it is told the rows by RunStart and knows nothing else going in.
-	var board *Board
-
-	if err := ReadEvents(f, func(ev Event) {
-		if ev.Kind == RunStart {
-			board = NewBoardFor(ev.Repos)
-
-			return
-		}
-
-		board.Apply(ev)
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	if board == nil {
-		t.Fatal("the stream carried no run_start, so no table could be built")
-	}
-
-	got := []byte(board.Render())
-	golden := filepath.Join("testdata", "run.table.golden")
-
-	if *update {
-		if err := os.WriteFile(golden, got, 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		return
-	}
-
-	wantBytes, err := os.ReadFile(golden)
-	if err != nil {
-		t.Fatalf("%v (run: go test ./maintain -update)", err)
-	}
-
-	if string(got) != string(wantBytes) {
-		t.Errorf("%s does not match:\n--- got ---\n%s\n--- want ---\n%s",
-			golden, got, wantBytes)
-	}
-}
-
-// TestNewBoardFor covers what a reporter gets handed: a list of keys off the
-// wire, including whatever a malformed line puts in it.
-func TestNewBoardFor(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		keys []string
-		want int
-	}{
-		{"none", nil, 0},
-		{"two", []string{"user/alpha", "user/beta"}, 2},
-		{"a key with no slash is skipped", []string{"user/alpha", "nope"}, 1},
-		{"an empty owner is skipped", []string{"/beta", "user/alpha"}, 1},
-		{"an empty name is skipped", []string{"user/", "user/alpha"}, 1},
-		{"a second slash is skipped", []string{"user/a/b", "user/alpha"}, 1},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := len(NewBoardFor(tc.keys).Results()); got != tc.want {
-				t.Errorf("got %d rows, want %d", got, tc.want)
-			}
-		})
-	}
-}
-
-// TestRunStartCarriesEveryRepo is the property the table depends on: a
-// reporter that has only the stream can name every repository the run
-// touched before any of them finishes.
-func TestRunStartCarriesEveryRepo(t *testing.T) {
-	f, err := os.Open("testdata/run.jsonl")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	defer func() { _ = f.Close() }()
-
-	var announced []string
-
-	mentioned := map[string]bool{}
-
-	if err := ReadEvents(f, func(ev Event) {
-		if ev.Kind == RunStart {
-			announced = ev.Repos
-		}
-
-		if ev.Repo != "" {
-			mentioned[ev.Repo] = true
-		}
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	known := map[string]bool{}
-	for _, key := range announced {
-		known[key] = true
-	}
-
-	for repo := range mentioned {
-		if !known[repo] {
-			t.Errorf("%q appears in the stream but run_start did not announce it", repo)
-		}
 	}
 }

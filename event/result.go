@@ -1,4 +1,4 @@
-package maintain
+package event
 
 import (
 	"errors"
