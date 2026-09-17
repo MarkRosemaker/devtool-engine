@@ -236,7 +236,7 @@ func prepend(list, module string) string {
 		return module
 	}
 
-	for _, p := range strings.Split(list, ",") {
+	for p := range strings.SplitSeq(list, ",") {
 		if p == module {
 			return list
 		}
