@@ -181,7 +181,8 @@ func Read(r io.Reader, fn func(Event)) error {
 		if !ev.Kind.Valid() {
 			return fmt.Errorf(
 				"not an event, kind %q: %q — is something else writing to this stream?",
-				ev.Kind, line)
+				ev.Kind, line,
+			)
 		}
 
 		fn(ev)
