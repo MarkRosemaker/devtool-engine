@@ -11,8 +11,9 @@
 // a reason learned the hard way: while a run's logs went to the same place as
 // its events, every log line was a line the reader had to make sense of, and
 // the ones whose keys happened to match an event's field — repo, coverage,
-// commits — parsed into a valid-looking event that said nothing. Keeping them
-// apart is what [Read] enforces by refusing a line that is not an event.
+// commits — parsed into a valid-looking event that said nothing. [Read] keeps
+// them apart by skipping a line that is not an event and saying so, so a
+// stream nobody meant to share is visible rather than either silent or fatal.
 package event
 
 import (
@@ -20,6 +21,7 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"sync"
 	"time"
@@ -125,9 +127,9 @@ type writer struct {
 
 // Write returns an [Emitter] writing one JSON object per line to w.
 //
-// Give it a stream of its own. Anything else written there is a line the
-// reader has to reject, and the whole point of [Read] refusing it is that the
-// refusal happens loudly rather than being absorbed.
+// Give it a stream of its own. [Read] survives anything else written there,
+// but only by throwing it away, so a producer sharing this stream is losing
+// whatever it shared it with.
 //
 // A write that fails is dropped rather than reported. Emitting is reporting,
 // not the work: a run whose progress could not be written down has still
@@ -147,16 +149,35 @@ func (e *writer) Emit(ev Event) {
 	_, _ = e.w.Write(append(b, '\n'))
 }
 
+// maxStrayReports bounds what one contaminated stream can put in the log. A
+// producer writing something other than events is worth seeing, not worth
+// drowning in: something piping a whole log file in should cost a handful of
+// lines and a count, not a line per line.
+const maxStrayReports = 5
+
 // Read reads a JSON Lines stream, calling fn for each event.
 //
 // The counterpart of [Write], and the half a reporter uses: it is how a
 // progress table gets built from a run this process did not perform.
 //
-// A line that is not an event is an error naming the line. That is the
-// point: something else writing to this stream is a bug in the producer, and
-// a reader that shrugged it off would let the bug run for months — which is
-// exactly what happened when a logger shared the stream and its lines parsed
-// into events with no kind.
+// A line that is not an event is skipped and reported, not fatal. Both halves
+// matter, and each is there because the other alone was wrong:
+//
+// Skipped, because a stream is shared whether or not it should be. A clone's
+// progress, a warning from a tool the producer shells out to — one stray line
+// used to end the read, and with it the whole run's report, for a run that had
+// gone perfectly well. Reporting is not the work, and it should not be able to
+// throw the work away.
+//
+// Reported, because the bug this package exists to prevent was contamination
+// nobody could see: a logger shared the stream for months, its lines parsed
+// into events with no kind, and a consumer dropped them without a word. Silence
+// is what let that run. A skipped line is written to the log, which is a
+// different stream on purpose.
+//
+// What remains fatal is a stream that cannot be read at all — a line past the
+// buffer, a broken pipe — since that is not a stray line but a lost one, and a
+// table built from what arrived before it would be quietly wrong.
 //
 // Unknown *fields* are accepted, which is what lets a newer producer add one
 // without breaking an older reader.
@@ -167,25 +188,32 @@ func Read(r io.Reader, fn func(Event)) error {
 	// default 64KiB limit is worth raising.
 	scan.Buffer(make([]byte, 0, 64<<10), 1<<20)
 
+	strays := 0
+
 	for scan.Scan() {
 		line := scan.Bytes()
 		if len(line) == 0 {
 			continue
 		}
 
-		var ev Event
-		if err := json.Unmarshal(line, &ev); err != nil {
-			return fmt.Errorf("reading event %q: %w", line, err)
-		}
+		ev, err := decode(line)
+		if err != nil {
+			strays++
 
-		if !ev.Kind.Valid() {
-			return fmt.Errorf(
-				"not an event, kind %q: %q — is something else writing to this stream?",
-				ev.Kind, line,
-			)
+			if strays <= maxStrayReports {
+				slog.Warn("not an event, skipped",
+					"line", string(line), "why", err)
+			}
+
+			continue
 		}
 
 		fn(ev)
+	}
+
+	if strays > maxStrayReports {
+		slog.Warn("more of the event stream was not events",
+			"skipped", strays, "reported", maxStrayReports)
 	}
 
 	if err := scan.Err(); err != nil {
@@ -193,6 +221,22 @@ func Read(r io.Reader, fn func(Event)) error {
 	}
 
 	return nil
+}
+
+// decode turns one line into an event, saying why it is not one where it is
+// not: whether it failed to parse at all, or parsed into something carrying no
+// kind this package knows.
+func decode(line []byte) (Event, error) {
+	var ev Event
+	if err := json.Unmarshal(line, &ev); err != nil {
+		return Event{}, err
+	}
+
+	if !ev.Kind.Valid() {
+		return Event{}, fmt.Errorf("kind %q is not one this package knows", ev.Kind)
+	}
+
+	return ev, nil
 }
 
 // Emit sends an event, stamping it with the time, and does nothing where
