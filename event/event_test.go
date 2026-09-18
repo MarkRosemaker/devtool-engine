@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -38,12 +38,49 @@ func TestRemoteErrorKeepsItsMessage(t *testing.T) {
 	}
 }
 
-func TestReadRejectsGarbage(t *testing.T) {
-	err := Read(strings.NewReader("{\"kind\":\"repo_start\"}\nnot json\n"),
-		func(Event) {})
-	if err == nil {
-		t.Fatal("expected an error for a line that is not an event")
+// TestReadSkipsWhatIsNotAnEvent: the events on either side of a stray line
+// still arrive. A run that went perfectly well should not lose its report
+// because something else wrote one line to the stream.
+func TestReadSkipsWhatIsNotAnEvent(t *testing.T) {
+	logged := captureLog(t)
+
+	// The real line, off Telegram: go-git's clone progress, which reaches
+	// the stream because ghrepo hands it stdout.
+	const stream = `{"kind":"run_start"}` + "\n" +
+		"Enumerating objects: 178, done.\n" +
+		`{"kind":"run_done"}` + "\n"
+
+	var got []Kind
+
+	if err := Read(strings.NewReader(stream), func(ev Event) {
+		got = append(got, ev.Kind)
+	}); err != nil {
+		t.Fatalf("a stray line ended the read: %v", err)
 	}
+
+	if len(got) != 2 || got[0] != RunStart || got[1] != RunDone {
+		t.Errorf("kinds = %v, want the events on either side of the stray", got)
+	}
+
+	// Skipped, but not in silence: contamination nobody can see is the bug
+	// this package exists to prevent.
+	if !strings.Contains(logged.String(), "Enumerating objects") {
+		t.Errorf("the stray line was swallowed:\n%s", logged)
+	}
+}
+
+// captureLog redirects the default logger for one test and hands back what it
+// was written, restoring whatever was there before.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+
+	buf := &bytes.Buffer{}
+	before := slog.Default()
+
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(before) })
+
+	return buf
 }
 
 // TestBoardFromEventsMatchesResults is the acceptance check for making the
@@ -267,7 +304,7 @@ func TestRoundTrip(t *testing.T) {
 // TestReadRejectsLogLines is the regression guard for the bug this package
 // exists to make impossible: a logger writing to the event stream. These are
 // real lines from a run whose slog handler had been pointed at stdout.
-func TestReadRejectsLogLines(t *testing.T) {
+func TestReadSkipsLogLines(t *testing.T) {
 	for _, line := range []string{
 		// The line that failed loudly: repos is a count, not a list.
 		`{"time":"2026-09-16T11:41:02Z","level":"INFO","msg":"dependency graph built","repos":36}`,
@@ -276,23 +313,49 @@ func TestReadRejectsLogLines(t *testing.T) {
 		`{"time":"2026-09-16T11:41:11Z","level":"INFO","msg":"repository is up to date","repo":"user/beta","coverage":71.7}`,
 		// A kind this package does not know is no better than none.
 		`{"kind":"repo_paused","repo":"user/alpha"}`,
+		// Not JSON at all, which is what a tool's own output looks like.
+		"Enumerating objects: 178, done.",
 	} {
 		t.Run(line[:min(len(line), 60)], func(t *testing.T) {
+			logged := captureLog(t)
+
 			var seen int
 
-			err := Read(strings.NewReader(line+"\n"), func(Event) { seen++ })
-			if err == nil {
-				t.Fatal("a log line was accepted as an event")
+			if err := Read(strings.NewReader(line+"\n"), func(Event) { seen++ }); err != nil {
+				t.Fatalf("a stray line ended the read: %v", err)
 			}
 
 			if seen != 0 {
-				t.Errorf("%d events reached the consumer before the refusal", seen)
+				t.Errorf("%d of these reached the consumer as events", seen)
 			}
 
-			if !strings.Contains(err.Error(), strconv.Quote(line)) {
-				t.Errorf("the error does not name the offending line: %v", err)
+			if !strings.Contains(logged.String(), "not an event") {
+				t.Errorf("the line was skipped without a word:\n%s", logged)
 			}
 		})
+	}
+}
+
+// TestReadBoundsWhatItReportsAboutOneStream: a producer writing something
+// other than events is worth seeing, not worth drowning in — somebody piping
+// a log file in should cost a handful of lines and a count.
+func TestReadBoundsWhatItReportsAboutOneStream(t *testing.T) {
+	logged := captureLog(t)
+
+	stream := strings.Repeat("Enumerating objects: 178, done.\n", maxStrayReports*3)
+
+	if err := Read(strings.NewReader(stream), func(Event) {
+		t.Error("a stray line was delivered as an event")
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := strings.Count(logged.String(), "not an event"); got != maxStrayReports {
+		t.Errorf("reported %d lines, want %d", got, maxStrayReports)
+	}
+
+	if !strings.Contains(logged.String(), "skipped=15") {
+		t.Errorf("the total was not reported:\n%s", logged)
 	}
 }
 
