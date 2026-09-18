@@ -156,6 +156,62 @@ func (r *Runner) Update(
 	return res
 }
 
+// steps emits a repository's progress through its sequence.
+//
+// Everything the runner does is a step, not just the tasks the caller
+// configured: preparing, the test before anything changes, the push and the
+// test after are most of a repository's time, and a reader watching only the
+// tasks watches the fast part and sees nothing during the slow one.
+//
+// The count is fixed before the first step, so the fraction it reports never
+// moves under the reader. Steps that turn out to have nothing to do — a push
+// with no commits — are still announced and finished, because "nothing to
+// push" is worth reading and because leaving them out would make the count a
+// lie.
+type steps struct {
+	events Emitter
+	repo   string
+	index  int
+	count  int
+}
+
+func (s *steps) start(label string) {
+	s.index++
+
+	Emit(s.events, Event{
+		Kind: TaskStart, Repo: s.repo, Task: label,
+		TaskIndex: s.index, TaskCount: s.count,
+	})
+}
+
+// within announces a step that runs inside the one already under way, keeping
+// its parent's position: the test a task triggers is a minute of silence
+// otherwise, and it is not a step of the sequence in its own right.
+func (s *steps) within(label string) {
+	Emit(s.events, Event{
+		Kind: TaskStart, Repo: s.repo, Task: label,
+		TaskIndex: s.index, TaskCount: s.count,
+	})
+}
+
+func (s *steps) done(label string, committed bool) {
+	Emit(s.events, Event{
+		Kind: TaskDone, Repo: s.repo, Task: label, Committed: committed,
+		TaskIndex: s.index, TaskCount: s.count,
+	})
+}
+
+// failed closes the step that stopped the repository, so the stream names it
+// rather than leaving a reader to find it in the error's prose.
+func (s *steps) failed(label string, err error) error {
+	Emit(s.events, Event{
+		Kind: TaskDone, Repo: s.repo, Task: label, Err: err.Error(),
+		TaskIndex: s.index, TaskCount: s.count,
+	})
+
+	return err
+}
+
 // update does the work of [Runner.Update], writing what it learns into res and
 // returning the first error that stops it.
 //
@@ -164,23 +220,37 @@ func (r *Runner) Update(
 func (r *Runner) update(
 	ctx context.Context, repo Repo, spec Spec, seq Sequence, events Emitter, res *Result,
 ) error {
+	tasks := seq(r, repo, spec)
+
+	// The four beyond the tasks: preparing, the test going in, the push and
+	// the test coming out.
+	st := &steps{events: events, repo: repo.String(), count: len(tasks) + 4}
+
+	st.start("prepare")
+
 	if err := r.prepare(ctx, repo, spec); err != nil {
-		return err
+		return st.failed("prepare", err)
 	}
+
+	st.done("prepare", false)
 
 	// Establish that the repository is healthy before changing anything, so a
 	// pre-existing failure is not reported against the first task that runs.
+	st.start("test")
+
 	coverage, err := r.TestCover(ctx, repo, spec)
 	if err != nil {
-		return fmt.Errorf("testing before any changes: %w", err)
+		return st.failed("test", fmt.Errorf("testing before any changes: %w", err))
 	}
+
+	st.done("test", false)
 
 	// Whether anything committed could have moved the coverage figure. A run
 	// that only rewrote a README has not.
 	var moved bool
 
-	for _, task := range seq(r, repo, spec) {
-		committed, relevant, err := r.apply(ctx, repo, spec, task, events)
+	for _, task := range tasks {
+		committed, relevant, err := r.apply(ctx, repo, spec, task, st)
 		if err != nil {
 			return err
 		}
@@ -192,27 +262,41 @@ func (r *Runner) update(
 		moved = moved || relevant
 	}
 
+	st.start("push")
+
 	if len(res.Commits) > 0 {
 		if err := repo.Push(ctx); err != nil {
-			return fmt.Errorf("pushing: %w", err)
+			return st.failed("push", fmt.Errorf("pushing: %w", err))
 		}
 
 		res.Pushed = true
 
 		slog.InfoContext(ctx, "pushed",
 			"repo", repo.String(), "commits", res.Commits)
+
+		Emit(events, Event{
+			Kind: RepoPushed, Repo: repo.String(), Commits: res.Commits,
+		})
 	}
+
+	// Not Committed: the push moved commits, it did not make one. RepoPushed
+	// above is what says it happened.
+	st.done("push", false)
 
 	// The figure measured on the way in still stands unless something
 	// committed could have moved it. A run that changed nothing, or changed
 	// only files the caller calls inert, has the same code it tested going in
 	// — and measuring again would run the whole suite to arrive at a number
 	// already in hand.
+	st.start("test")
+
 	if moved {
 		if coverage, err = r.TestCover(ctx, repo, spec); err != nil {
-			return fmt.Errorf("measuring coverage: %w", err)
+			return st.failed("test", fmt.Errorf("measuring coverage: %w", err))
 		}
 	}
+
+	st.done("test", false)
 
 	res.Coverage = coverage
 
@@ -261,21 +345,22 @@ func (r *Runner) prepare(ctx context.Context, repo Repo, spec Spec) error {
 // A task that leaves the worktree clean had nothing to do, which is the normal
 // case once a repository is in good shape.
 func (r *Runner) apply(
-	ctx context.Context, repo Repo, spec Spec, task Task, events Emitter,
+	ctx context.Context, repo Repo, spec Spec, task Task, st *steps,
 ) (committed, relevant bool, err error) {
-	Emit(events, Event{Kind: TaskStart, Repo: repo.String(), Task: task.label()})
+	st.start(task.label())
 
 	if err := task.Run(ctx); err != nil {
-		return false, false, fmt.Errorf("%s: %w", task.Name, err)
+		return false, false, st.failed(task.label(), fmt.Errorf("%s: %w", task.Name, err))
 	}
 
 	files, err := repo.GetChangedFiles()
 	if err != nil {
-		return false, false, fmt.Errorf("%s: getting changed files: %w", task.Name, err)
+		return false, false, st.failed(task.label(),
+			fmt.Errorf("%s: getting changed files: %w", task.Name, err))
 	}
 
 	if len(files) == 0 {
-		Emit(events, Event{Kind: TaskDone, Repo: repo.String(), Task: task.label()})
+		st.done(task.label(), false)
 
 		return false, false, nil
 	}
@@ -286,21 +371,31 @@ func (r *Runner) apply(
 	// against that task and its damage is never pushed. A task that rewrote
 	// only inert files has nothing to break.
 	if relevant {
+		// Announced within the task rather than as a step of its own: this is
+		// the whole suite, often the longest silence in a repository, and it
+		// happens because the task changed something rather than because the
+		// sequence asked for it.
+		testing := task.label() + " → test"
+
+		st.within(testing)
+
 		if _, err := r.TestCover(ctx, repo, spec); err != nil {
-			return false, false, fmt.Errorf("%s: testing after changes: %w", task.Name, err)
+			return false, false, st.failed(task.label(),
+				fmt.Errorf("%s: testing after changes: %w", task.Name, err))
 		}
+
+		st.done(testing, false)
 	}
 
 	if err := repo.CommitAll(task.Name); err != nil {
-		return false, false, fmt.Errorf("%s: committing: %w", task.Name, err)
+		return false, false, st.failed(task.label(),
+			fmt.Errorf("%s: committing: %w", task.Name, err))
 	}
 
 	slog.InfoContext(ctx, "committed",
 		"repo", repo.String(), "task", task.Name, "files", len(files))
 
-	Emit(events, Event{
-		Kind: TaskDone, Repo: repo.String(), Task: task.label(), Committed: true,
-	})
+	st.done(task.label(), true)
 
 	return true, relevant, nil
 }

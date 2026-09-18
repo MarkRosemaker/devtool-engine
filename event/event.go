@@ -42,16 +42,33 @@ const (
 	RepoStart Kind = "repo_start"
 	RepoDone  Kind = "repo_done"
 
-	// TaskStart and TaskDone bracket one task. TaskDone says whether it
+	// TaskStart and TaskDone bracket one step. TaskDone says whether it
 	// committed, which is the only thing a task's outcome amounts to: a task
 	// that changed nothing leaves the worktree clean and is not a failure.
+	// It carries Err where the step is what failed, which is the only place
+	// the stream names the step rather than leaving it to the error's prose.
 	TaskStart Kind = "task_start"
 	TaskDone  Kind = "task_done"
+
+	// RepoPushed says commits reached the remote, at the moment they did.
+	// RepoDone carries the same list, but can be a whole test suite later,
+	// and a reader watching a run should not have to wait for it.
+	RepoPushed Kind = "repo_pushed"
+
+	// RunProgress reports a run-level phase that takes long enough to be
+	// worth watching — planning, where the repositories are opened and
+	// cloned before any of them is maintained. Task names the phase, and
+	// TaskIndex and TaskCount count what it has got through.
+	RunProgress Kind = "run_progress"
 )
 
 // kinds is every kind this package knows, which is what makes a line an event
 // rather than some other JSON object that happened to arrive.
-var kinds = []Kind{RunStart, RunDone, RepoStart, RepoDone, TaskStart, TaskDone}
+var kinds = []Kind{
+	RunStart, RunDone, RunProgress,
+	RepoStart, RepoDone, RepoPushed,
+	TaskStart, TaskDone,
+}
 
 // Valid reports whether k is a kind this package knows.
 func (k Kind) Valid() bool { return slices.Contains(kinds, k) }
@@ -84,8 +101,19 @@ type Event struct {
 	// from until the first repository has already finished.
 	Repos []string `json:"repos,omitempty"`
 
-	// Task is the task's short label, set on TaskStart and TaskDone.
+	// Task is the step's short label, set on TaskStart and TaskDone.
 	Task string `json:"task,omitempty"`
+
+	// TaskIndex and TaskCount place a step in its repository's sequence,
+	// 1-based and set on TaskStart and TaskDone, so a consumer can say how far
+	// along a repository is without knowing what the sequence contains.
+	//
+	// A step that runs inside another — the test suite a task triggers by
+	// changing something — carries its parent's index rather than one of its
+	// own, so the pair stays a fraction of the sequence rather than of
+	// whatever happened to occur.
+	TaskIndex int `json:"taskIndex,omitempty"`
+	TaskCount int `json:"taskCount,omitempty"`
 
 	// Committed is set on TaskDone: the task changed something and the change
 	// was committed.
