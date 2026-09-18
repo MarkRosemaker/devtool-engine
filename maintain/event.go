@@ -29,6 +29,9 @@ const (
 	RepoDone  = event.RepoDone
 	TaskStart = event.TaskStart
 	TaskDone  = event.TaskDone
+
+	RepoPushed  = event.RepoPushed
+	RunProgress = event.RunProgress
 )
 
 // Deprecated: use the event package.

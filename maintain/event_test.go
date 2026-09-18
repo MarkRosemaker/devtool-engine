@@ -56,9 +56,49 @@ func TestRunnerEmitsEvents(t *testing.T) {
 
 		(&Runner{}).Update(t.Context(), repo, Spec{Coverage: 90}, seq, rec)
 
-		want := "repo_start,task_start,task_done,task_start,task_done,repo_done"
-		if got := rec.kinds(); got != want {
-			t.Errorf("kinds =\n  %s\nwant\n  %s", got, want)
+		// Asserted as properties rather than as one expected string: the
+		// sequence is the caller's and the steps around it are the runner's,
+		// so a literal would have to be rewritten every time either changed
+		// and would say nothing about what a reader depends on.
+		//
+		// Every step is bracketed. A start with no done is a step a reader
+		// would show as running for the rest of the run.
+		open := map[string]int{}
+
+		for _, ev := range rec.events {
+			switch ev.Kind {
+			case TaskStart:
+				open[ev.Task]++
+			case TaskDone:
+				open[ev.Task]--
+			}
+		}
+
+		for task, n := range open {
+			if n != 0 {
+				t.Errorf("step %q has %d starts left unfinished", task, n)
+			}
+		}
+
+		// The work the runner does around the sequence is reported too: these
+		// are most of a repository's time, and a reader watching only the
+		// caller's tasks watches the fast part.
+		for _, want := range []string{"prepare", "test", "push"} {
+			if !started(rec.events, want) {
+				t.Errorf("no %q step was reported", want)
+			}
+		}
+
+		// Positions are 1-based and within the count, including the test a
+		// task triggers, which keeps its parent's position.
+		for _, ev := range rec.events {
+			if ev.Kind != TaskStart && ev.Kind != TaskDone {
+				continue
+			}
+
+			if ev.TaskIndex < 1 || ev.TaskIndex > ev.TaskCount {
+				t.Errorf("step %q is %d of %d", ev.Task, ev.TaskIndex, ev.TaskCount)
+			}
 		}
 
 		// The first task changed something and the second did not, which is
@@ -74,6 +114,24 @@ func TestRunnerEmitsEvents(t *testing.T) {
 
 		if len(committed) != 1 || committed[0] != "readme" {
 			t.Errorf("committed tasks = %v, want just [readme]", committed)
+		}
+
+		// The push is announced when it happens, not only inside RepoDone,
+		// which can be a whole test suite later.
+		var pushed *Event
+
+		for i, ev := range rec.events {
+			if ev.Kind == RepoPushed {
+				pushed = &rec.events[i]
+			}
+		}
+
+		if pushed == nil {
+			t.Fatal("no repo_pushed event")
+		}
+
+		if len(pushed.Commits) != 1 || pushed.Commits[0] != "readme" {
+			t.Errorf("repo_pushed carried %v, want the commits", pushed.Commits)
 		}
 
 		// RepoDone carries a whole row, so a consumer reading only that kind
@@ -116,6 +174,25 @@ func TestRunnerEmitsEvents(t *testing.T) {
 
 		if !strings.Contains(done.Err, "boom") {
 			t.Errorf("Err = %q, want it to mention the failure", done.Err)
+		}
+
+		// The step that failed is named on the wire. Without this a reader
+		// has to find it in the error's prose, which is a sentence the task
+		// wrote and nobody promised to keep parseable.
+		var failed *Event
+
+		for i, ev := range rec.events {
+			if ev.Kind == TaskDone && ev.Err != "" {
+				failed = &rec.events[i]
+			}
+		}
+
+		if failed == nil {
+			t.Fatal("no task_done named the step that failed")
+		}
+
+		if failed.Task != "explode" {
+			t.Errorf("the failing step is named %q, want explode", failed.Task)
 		}
 	})
 
@@ -169,4 +246,15 @@ func TestEventsRoundTrip(t *testing.T) {
 	if !done.Pushed || len(done.Commits) != 1 || done.Commits[0] != "readme" {
 		t.Errorf("commits did not survive the trip: %+v", done)
 	}
+}
+
+// started reports whether any step with this label began.
+func started(events []Event, task string) bool {
+	for _, ev := range events {
+		if ev.Kind == TaskStart && ev.Task == task {
+			return true
+		}
+	}
+
+	return false
 }
