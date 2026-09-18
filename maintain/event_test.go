@@ -71,6 +71,7 @@ func TestRunnerEmitsEvents(t *testing.T) {
 				open[ev.Task]++
 			case TaskDone:
 				open[ev.Task]--
+			default:
 			}
 		}
 
