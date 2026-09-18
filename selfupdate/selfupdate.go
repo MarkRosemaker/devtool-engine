@@ -29,6 +29,8 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+
+	"golang.org/x/mod/semver"
 )
 
 // devel is what the toolchain stamps into a binary built from a working tree
@@ -93,6 +95,17 @@ func (o Outcome) String() string {
 	}
 }
 
+// local reports whether a version names a build nobody could install.
+//
+// Two shapes, because the toolchain stamps two. A binary with no version
+// information at all reads "(devel)". One built from a worktree reads the
+// commit it came from with "+dirty" after it — build metadata, which semver
+// ignores when comparing, so without this a local build would compare equal
+// to the published commit it was built from and be replaced by it.
+func local(version string) bool {
+	return version == devel || semver.Build(version) != ""
+}
+
 // ErrNoToolchain reports that the Go toolchain is missing, which is the one
 // requirement this mechanism has beyond a network.
 var ErrNoToolchain = errors.New("no go toolchain on PATH")
@@ -109,12 +122,12 @@ func (u *Updater) Update(ctx context.Context) (Outcome, error) {
 		return out, errors.New("no module to update from")
 	}
 
-	switch u.Current {
-	case "":
+	switch {
+	case u.Current == "":
 		out.Reason = "this binary carries no version, so there is nothing to compare"
 
 		return out, nil
-	case devel:
+	case local(u.Current):
 		out.Reason = "this is a local build, which a published one should not replace"
 
 		return out, nil
@@ -161,6 +174,15 @@ func (u *Updater) Latest(ctx context.Context) (string, error) {
 	cmd := exec.CommandContext(ctx, "go", "list", "-m", "-f", "{{.Version}}",
 		u.Module+"@latest")
 	cmd.Env = u.env()
+
+	// Asked from outside any module, because inside one that vendors its
+	// dependencies the toolchain refuses the question: "cannot query module
+	// due to -mod=vendor". That is where this gets asked in practice — a
+	// person or an agent runs self-update from the repository they are
+	// working in, and every repository this tool maintains vendors. The
+	// install below is not affected: "go install pkg@version" ignores the
+	// current module by design.
+	cmd.Dir = os.TempDir()
 
 	out, err := cmd.Output()
 	if err != nil {
