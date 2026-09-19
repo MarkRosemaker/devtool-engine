@@ -67,7 +67,7 @@ deps:
 # Everything a tool writes: the go:generate directives, then the files devtool owns.
 generate:
 	go generate ./...
-	devtool update -private
+	devtool update
 
 # For a runner that did not just regenerate: it reports through git, so your own uncommitted edits look like drift.
 verify: generate
