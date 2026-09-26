@@ -125,11 +125,11 @@ type Event struct {
 	// commit and would otherwise read as a single opaque step.
 	Files []string `json:"files,omitempty"`
 
-	// Vendored names the modules whose vendored copies the commit changed,
-	// sorted, in place of their files: re-vendoring one module can touch
-	// hundreds, and what a reader wants is which modules moved. Paths under
-	// vendor/ are summarised here and not repeated in Files.
-	Vendored []string `json:"vendored,omitempty"`
+	// Modules are the requirements the commit moved, sorted by path, read
+	// off go.mod before and after the task — what "go get -u" reports as
+	// upgraded, added or removed. Re-vendoring those can touch hundreds of
+	// files, so Files names vendor/ once rather than listing them.
+	Modules []ModuleChange `json:"modules,omitempty"`
 
 	// Coverage and PrevCoverage are set on RepoDone. Both, because reporting
 	// the change is the point of keeping either.
@@ -144,6 +144,17 @@ type Event struct {
 	// than an error, because this crosses a process boundary: what survives
 	// the trip is the message.
 	Err string `json:"err,omitempty"`
+}
+
+// ModuleChange is one requirement a commit moved.
+//
+// From is empty where the commit added the module and To where it removed
+// it; otherwise both are set and differ, and which way the version went is
+// the reader's to say.
+type ModuleChange struct {
+	Path string `json:"path"`
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
 }
 
 // Emitter receives the events of a run.

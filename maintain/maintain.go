@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+
+	"github.com/MarkRosemaker/devtool-engine/event"
 )
 
 // Spec is the state a repository is expected to be in.
@@ -202,10 +204,10 @@ func (s *steps) done(label string) {
 }
 
 // committed closes a step that committed, naming what the commit carried.
-func (s *steps) committed(label string, files, vendored []string) {
+func (s *steps) committed(label string, files []string, modules []event.ModuleChange) {
 	Emit(s.events, Event{
 		Kind: TaskDone, Repo: s.repo, Task: label,
-		Committed: true, Files: files, Vendored: vendored,
+		Committed: true, Files: files, Modules: modules,
 		TaskIndex: s.index, TaskCount: s.count,
 	})
 }
@@ -358,6 +360,9 @@ func (r *Runner) apply(
 ) (committed, relevant bool, err error) {
 	st.start(task.label())
 
+	// Read before the task runs, so a commit can say which modules it moved.
+	goMod := readGoMod(repo.Fs())
+
 	if err := task.Run(ctx); err != nil {
 		return false, false, st.failed(task.label(), fmt.Errorf("%s: %w", task.Name, err))
 	}
@@ -404,9 +409,7 @@ func (r *Runner) apply(
 	slog.InfoContext(ctx, "committed",
 		"repo", repo.String(), "task", task.Name, "files", len(files))
 
-	plain, vendored := splitVendored(repo.Fs(), files)
-
-	st.committed(task.label(), plain, vendored)
+	st.committed(task.label(), collapseVendor(files), moduleChanges(goMod, readGoMod(repo.Fs())))
 
 	return true, relevant, nil
 }

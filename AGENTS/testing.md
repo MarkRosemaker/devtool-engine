@@ -23,3 +23,13 @@ created, there is none: the command fails quietly and the mutation stays in
 place, ready to be committed. Copy the file aside before mutating it, and
 restore from the copy. This happened on `maintain/vendored.go` minutes after
 the section above was written.
+
+## Check the fixture says what the test thinks it says
+
+A fixture that is itself invalid makes a test pass or fail for the wrong
+reason. Writing `moduleChanges`, a `go.mod` requiring `v2.0.0` without the
+`/v2` path suffix did not parse, and a case meant to be "unreadable" parsed
+fine, because `modfile.ParseLax` skips unknown directives by design — so the
+"unreadable after" case passed only because the *before* side was broken too.
+Parse a fixture on its own first, and for a lax parser, break a directive it
+knows (a `require` with no version) rather than inventing one it ignores.
