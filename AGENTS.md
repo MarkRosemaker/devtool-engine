@@ -108,3 +108,9 @@ generated. Your own rules go below that block, where they win — in a
 - Watching a pull request costs nothing, so do not spend a turn subscribing
   or unsubscribing and do not ask which is wanted. If it happens by itself,
   leave it. You will be told when there is a review to act on.
+
+## Particular to this repository
+
+Open one when the work touches it.
+
+- [Proving a test](AGENTS/testing.md)

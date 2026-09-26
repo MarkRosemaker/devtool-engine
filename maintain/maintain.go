@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 )
 
@@ -194,9 +195,11 @@ func (s *steps) within(label string) {
 	})
 }
 
-func (s *steps) done(label string, committed bool) {
+// done closes a step, naming the files it committed where it committed any.
+func (s *steps) done(label string, files ...string) {
 	Emit(s.events, Event{
-		Kind: TaskDone, Repo: s.repo, Task: label, Committed: committed,
+		Kind: TaskDone, Repo: s.repo, Task: label,
+		Committed: len(files) > 0, Files: files,
 		TaskIndex: s.index, TaskCount: s.count,
 	})
 }
@@ -232,7 +235,7 @@ func (r *Runner) update(
 		return st.failed("prepare", err)
 	}
 
-	st.done("prepare", false)
+	st.done("prepare")
 
 	// Establish that the repository is healthy before changing anything, so a
 	// pre-existing failure is not reported against the first task that runs.
@@ -243,7 +246,7 @@ func (r *Runner) update(
 		return st.failed("test", fmt.Errorf("testing before any changes: %w", err))
 	}
 
-	st.done("test", false)
+	st.done("test")
 
 	// Whether anything committed could have moved the coverage figure. A run
 	// that only rewrote a README has not.
@@ -281,7 +284,7 @@ func (r *Runner) update(
 
 	// Not Committed: the push moved commits, it did not make one. RepoPushed
 	// above is what says it happened.
-	st.done("push", false)
+	st.done("push")
 
 	// The figure measured on the way in still stands unless something
 	// committed could have moved it. A run that changed nothing, or changed
@@ -296,7 +299,7 @@ func (r *Runner) update(
 		}
 	}
 
-	st.done("test", false)
+	st.done("test")
 
 	res.Coverage = coverage
 
@@ -360,7 +363,7 @@ func (r *Runner) apply(
 	}
 
 	if len(files) == 0 {
-		st.done(task.label(), false)
+		st.done(task.label())
 
 		return false, false, nil
 	}
@@ -384,7 +387,7 @@ func (r *Runner) apply(
 				fmt.Errorf("%s: testing after changes: %w", task.Name, err))
 		}
 
-		st.done(testing, false)
+		st.done(testing)
 	}
 
 	if err := repo.CommitAll(task.Name); err != nil {
@@ -395,7 +398,7 @@ func (r *Runner) apply(
 	slog.InfoContext(ctx, "committed",
 		"repo", repo.String(), "task", task.Name, "files", len(files))
 
-	st.done(task.label(), true)
+	st.done(task.label(), slices.Sorted(slices.Values(files))...)
 
 	return true, relevant, nil
 }

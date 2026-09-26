@@ -156,6 +156,46 @@ func TestRunnerEmitsEvents(t *testing.T) {
 		}
 	})
 
+	// A caller may write several files in one task and so one commit — devtool
+	// writes everything it owns that way — and a reporter should still be able
+	// to say which. The paths come out sorted whatever order git lists them in,
+	// so the same commit always reads the same.
+	t.Run("a commit names its files", func(t *testing.T) {
+		repo := &fakeRepo{changed: []string{"README.md", "LICENSE", "devtool.json"}}
+		rec := &recorder{}
+
+		seq := func(*Runner, Repo, Spec) []Task {
+			return []Task{
+				{Name: "devtool update", Short: "update", Run: func(context.Context) error {
+					repo.dirty = true
+
+					return nil
+				}},
+				{Name: "go vet", Short: "vet", Run: func(context.Context) error { return nil }},
+			}
+		}
+
+		(&Runner{}).Update(t.Context(), repo, Spec{}, seq, rec)
+
+		files := map[string][]string{}
+
+		for _, ev := range rec.events {
+			if ev.Kind == TaskDone {
+				files[ev.Task] = ev.Files
+			}
+		}
+
+		if got, want := strings.Join(files["update"], ","), "LICENSE,README.md,devtool.json"; got != want {
+			t.Errorf("update committed %q, want %q", got, want)
+		}
+
+		// A step that committed nothing names nothing, rather than an empty
+		// list a reader would have to tell apart from a missing one.
+		if got := files["vet"]; got != nil {
+			t.Errorf("vet committed nothing and named %q", got)
+		}
+	})
+
 	t.Run("a failure is reported on RepoDone as text", func(t *testing.T) {
 		rec := &recorder{}
 		boom := errors.New("boom")

@@ -119,6 +119,12 @@ type Event struct {
 	// was committed.
 	Committed bool `json:"committed,omitempty"`
 
+	// Files are the paths the commit carried, sorted, set on TaskDone where
+	// Committed is. The commit says that a task changed something; this says
+	// what, which matters most for a task that writes several files as one
+	// commit and would otherwise read as a single opaque step.
+	Files []string `json:"files,omitempty"`
+
 	// Coverage and PrevCoverage are set on RepoDone. Both, because reporting
 	// the change is the point of keeping either.
 	Coverage     float64 `json:"coverage,omitempty"`
