@@ -16,7 +16,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"slices"
 	"sync"
 )
 
@@ -195,11 +194,18 @@ func (s *steps) within(label string) {
 	})
 }
 
-// done closes a step, naming the files it committed where it committed any.
-func (s *steps) done(label string, files ...string) {
+func (s *steps) done(label string) {
 	Emit(s.events, Event{
 		Kind: TaskDone, Repo: s.repo, Task: label,
-		Committed: len(files) > 0, Files: files,
+		TaskIndex: s.index, TaskCount: s.count,
+	})
+}
+
+// committed closes a step that committed, naming what the commit carried.
+func (s *steps) committed(label string, files, vendored []string) {
+	Emit(s.events, Event{
+		Kind: TaskDone, Repo: s.repo, Task: label,
+		Committed: true, Files: files, Vendored: vendored,
 		TaskIndex: s.index, TaskCount: s.count,
 	})
 }
@@ -398,7 +404,9 @@ func (r *Runner) apply(
 	slog.InfoContext(ctx, "committed",
 		"repo", repo.String(), "task", task.Name, "files", len(files))
 
-	st.done(task.label(), slices.Sorted(slices.Values(files))...)
+	plain, vendored := splitVendored(repo.Fs(), files)
+
+	st.committed(task.label(), plain, vendored)
 
 	return true, relevant, nil
 }

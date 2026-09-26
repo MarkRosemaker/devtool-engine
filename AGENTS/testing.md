@@ -15,3 +15,11 @@ expression that used the import.
 
 It happened adding `Files` to `TaskDone`: dropping the paths outright left
 `slices` unused, and the first "red" was the compiler.
+
+## Put the change back from a copy, not from git
+
+`git checkout -- file` restores the committed version. On a file the change
+created, there is none: the command fails quietly and the mutation stays in
+place, ready to be committed. Copy the file aside before mutating it, and
+restore from the copy. This happened on `maintain/vendored.go` minutes after
+the section above was written.

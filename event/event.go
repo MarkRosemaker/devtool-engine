@@ -125,6 +125,12 @@ type Event struct {
 	// commit and would otherwise read as a single opaque step.
 	Files []string `json:"files,omitempty"`
 
+	// Vendored names the modules whose vendored copies the commit changed,
+	// sorted, in place of their files: re-vendoring one module can touch
+	// hundreds, and what a reader wants is which modules moved. Paths under
+	// vendor/ are summarised here and not repeated in Files.
+	Vendored []string `json:"vendored,omitempty"`
+
 	// Coverage and PrevCoverage are set on RepoDone. Both, because reporting
 	// the change is the point of keeping either.
 	Coverage     float64 `json:"coverage,omitempty"`
