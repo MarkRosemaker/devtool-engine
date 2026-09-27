@@ -119,6 +119,18 @@ type Event struct {
 	// was committed.
 	Committed bool `json:"committed,omitempty"`
 
+	// Files are the paths the commit carried, sorted, set on TaskDone where
+	// Committed is. The commit says that a task changed something; this says
+	// what, which matters most for a task that writes several files as one
+	// commit and would otherwise read as a single opaque step.
+	Files []string `json:"files,omitempty"`
+
+	// Modules are the requirements the commit moved, sorted by path, read
+	// off go.mod before and after the task — what "go get -u" reports as
+	// upgraded, added or removed. Re-vendoring those can touch hundreds of
+	// files, so Files names vendor/ once rather than listing them.
+	Modules []ModuleChange `json:"modules,omitempty"`
+
 	// Coverage and PrevCoverage are set on RepoDone. Both, because reporting
 	// the change is the point of keeping either.
 	Coverage     float64 `json:"coverage,omitempty"`
@@ -132,6 +144,17 @@ type Event struct {
 	// than an error, because this crosses a process boundary: what survives
 	// the trip is the message.
 	Err string `json:"err,omitempty"`
+}
+
+// ModuleChange is one requirement a commit moved.
+//
+// From is empty where the commit added the module and To where it removed
+// it; otherwise both are set and differ, and which way the version went is
+// the reader's to say.
+type ModuleChange struct {
+	Path string `json:"path"`
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
 }
 
 // Emitter receives the events of a run.

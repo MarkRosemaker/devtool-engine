@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+
+	"github.com/MarkRosemaker/devtool-engine/event"
 )
 
 // Spec is the state a repository is expected to be in.
@@ -194,9 +196,18 @@ func (s *steps) within(label string) {
 	})
 }
 
-func (s *steps) done(label string, committed bool) {
+func (s *steps) done(label string) {
 	Emit(s.events, Event{
-		Kind: TaskDone, Repo: s.repo, Task: label, Committed: committed,
+		Kind: TaskDone, Repo: s.repo, Task: label,
+		TaskIndex: s.index, TaskCount: s.count,
+	})
+}
+
+// committed closes a step that committed, naming what the commit carried.
+func (s *steps) committed(label string, files []string, modules []event.ModuleChange) {
+	Emit(s.events, Event{
+		Kind: TaskDone, Repo: s.repo, Task: label,
+		Committed: true, Files: files, Modules: modules,
 		TaskIndex: s.index, TaskCount: s.count,
 	})
 }
@@ -232,7 +243,7 @@ func (r *Runner) update(
 		return st.failed("prepare", err)
 	}
 
-	st.done("prepare", false)
+	st.done("prepare")
 
 	// Establish that the repository is healthy before changing anything, so a
 	// pre-existing failure is not reported against the first task that runs.
@@ -243,7 +254,7 @@ func (r *Runner) update(
 		return st.failed("test", fmt.Errorf("testing before any changes: %w", err))
 	}
 
-	st.done("test", false)
+	st.done("test")
 
 	// Whether anything committed could have moved the coverage figure. A run
 	// that only rewrote a README has not.
@@ -281,7 +292,7 @@ func (r *Runner) update(
 
 	// Not Committed: the push moved commits, it did not make one. RepoPushed
 	// above is what says it happened.
-	st.done("push", false)
+	st.done("push")
 
 	// The figure measured on the way in still stands unless something
 	// committed could have moved it. A run that changed nothing, or changed
@@ -296,7 +307,7 @@ func (r *Runner) update(
 		}
 	}
 
-	st.done("test", false)
+	st.done("test")
 
 	res.Coverage = coverage
 
@@ -349,6 +360,9 @@ func (r *Runner) apply(
 ) (committed, relevant bool, err error) {
 	st.start(task.label())
 
+	// Read before the task runs, so a commit can say which modules it moved.
+	goMod := readGoMod(repo.Fs())
+
 	if err := task.Run(ctx); err != nil {
 		return false, false, st.failed(task.label(), fmt.Errorf("%s: %w", task.Name, err))
 	}
@@ -360,7 +374,7 @@ func (r *Runner) apply(
 	}
 
 	if len(files) == 0 {
-		st.done(task.label(), false)
+		st.done(task.label())
 
 		return false, false, nil
 	}
@@ -384,7 +398,7 @@ func (r *Runner) apply(
 				fmt.Errorf("%s: testing after changes: %w", task.Name, err))
 		}
 
-		st.done(testing, false)
+		st.done(testing)
 	}
 
 	if err := repo.CommitAll(task.Name); err != nil {
@@ -395,7 +409,7 @@ func (r *Runner) apply(
 	slog.InfoContext(ctx, "committed",
 		"repo", repo.String(), "task", task.Name, "files", len(files))
 
-	st.done(task.label(), true)
+	st.committed(task.label(), collapseVendor(files), moduleChanges(goMod, readGoMod(repo.Fs())))
 
 	return true, relevant, nil
 }
