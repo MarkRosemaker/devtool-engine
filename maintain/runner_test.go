@@ -306,3 +306,59 @@ func TestRunnerSkipsTestsForInertChanges(t *testing.T) {
 		}
 	})
 }
+
+// TestACommitIsReportedAsWhatItAmountedTo: a task doing several things as one
+// commit says which of them happened, and that is what the run reports, both
+// in its result and in the push event a watcher reads.
+func TestACommitIsReportedAsWhatItAmountedTo(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		describe func([]string) []string
+		want     []string
+	}{
+		{
+			name: "described",
+			describe: func(files []string) []string {
+				if !equal(files, []string{"README.md", "Makefile"}) {
+					return []string{"wrong files"}
+				}
+
+				return []string{"readme", "makefile"}
+			},
+			want: []string{"readme", "makefile"},
+		},
+		{"nothing to say falls back to the label", func([]string) []string { return nil }, []string{"update"}},
+		{"not described", nil, []string{"update"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &fakeRepo{changed: []string{"README.md", "Makefile"}}
+
+			seq := func(*Runner, Repo, Spec) []Task {
+				return []Task{{
+					Name: "devtool update", Short: "update", Describe: tc.describe,
+					Run: func(context.Context) error { repo.dirty = true; return nil },
+				}}
+			}
+
+			var pushed []string
+
+			res := (&Runner{}).Update(t.Context(), repo, Spec{}, seq,
+				EmitterFunc(func(ev Event) {
+					if ev.Kind == RepoPushed {
+						pushed = ev.Commits
+					}
+				}))
+			if res.Err != nil {
+				t.Fatal(res.Err)
+			}
+
+			if !equal(res.Commits, tc.want) {
+				t.Errorf("Commits = %v, want %v", res.Commits, tc.want)
+			}
+
+			if !equal(pushed, tc.want) {
+				t.Errorf("the push event says %v, want %v", pushed, tc.want)
+			}
+		})
+	}
+}
