@@ -50,6 +50,12 @@ type Task struct {
 	// changes and return nil: an unchanged worktree is what tells the runner
 	// there is nothing to commit.
 	Run func(ctx context.Context) error
+
+	// Describe names what a commit of this task amounted to, from the files
+	// it changed. A task doing several things as one commit uses it to say
+	// which of them happened, and those names are what the run reports as
+	// committed. Nil, or an empty answer, reports the task's own label.
+	Describe func(files []string) []string
 }
 
 // label returns the name to show for the task in a progress table.
@@ -59,6 +65,17 @@ func (t Task) label() string {
 	}
 
 	return t.Name
+}
+
+// describe is what a commit of this task reports, given the files it changed.
+func (t Task) describe(files []string) []string {
+	if t.Describe != nil {
+		if names := t.Describe(files); len(names) > 0 {
+			return names
+		}
+	}
+
+	return []string{t.label()}
 }
 
 // Sequence produces the tasks to run against a repository.
@@ -266,9 +283,7 @@ func (r *Runner) update(
 			return err
 		}
 
-		if committed {
-			res.Commits = append(res.Commits, task.label())
-		}
+		res.Commits = append(res.Commits, committed...)
 
 		moved = moved || relevant
 	}
@@ -350,33 +365,33 @@ func (r *Runner) prepare(ctx context.Context, repo Repo, spec Spec) error {
 	return nil
 }
 
-// apply runs one task and commits what it changed, reporting whether it
-// produced a commit.
+// apply runs one task and commits what it changed, reporting what the commit
+// amounted to, or nothing where there was none.
 //
 // A task that leaves the worktree clean had nothing to do, which is the normal
 // case once a repository is in good shape.
 func (r *Runner) apply(
 	ctx context.Context, repo Repo, spec Spec, task Task, st *steps,
-) (committed, relevant bool, err error) {
+) (committed []string, relevant bool, err error) {
 	st.start(task.label())
 
 	// Read before the task runs, so a commit can say which modules it moved.
 	goMod := readGoMod(repo.Fs())
 
 	if err := task.Run(ctx); err != nil {
-		return false, false, st.failed(task.label(), fmt.Errorf("%s: %w", task.Name, err))
+		return nil, false, st.failed(task.label(), fmt.Errorf("%s: %w", task.Name, err))
 	}
 
 	files, err := repo.GetChangedFiles()
 	if err != nil {
-		return false, false, st.failed(task.label(),
+		return nil, false, st.failed(task.label(),
 			fmt.Errorf("%s: getting changed files: %w", task.Name, err))
 	}
 
 	if len(files) == 0 {
 		st.done(task.label())
 
-		return false, false, nil
+		return nil, false, nil
 	}
 
 	relevant = r.relevant(spec, files)
@@ -394,7 +409,7 @@ func (r *Runner) apply(
 		st.within(testing)
 
 		if _, err := r.TestCover(ctx, repo, spec); err != nil {
-			return false, false, st.failed(task.label(),
+			return nil, false, st.failed(task.label(),
 				fmt.Errorf("%s: testing after changes: %w", task.Name, err))
 		}
 
@@ -402,7 +417,7 @@ func (r *Runner) apply(
 	}
 
 	if err := repo.CommitAll(task.Name); err != nil {
-		return false, false, st.failed(task.label(),
+		return nil, false, st.failed(task.label(),
 			fmt.Errorf("%s: committing: %w", task.Name, err))
 	}
 
@@ -411,7 +426,7 @@ func (r *Runner) apply(
 
 	st.committed(task.label(), collapseVendor(files), moduleChanges(goMod, readGoMod(repo.Fs())))
 
-	return true, relevant, nil
+	return task.describe(files), relevant, nil
 }
 
 // relevant reports whether a set of changed files is worth testing over.
