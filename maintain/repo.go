@@ -59,7 +59,7 @@ type Repo interface {
 	GoTestCover(ctx context.Context) (float64, error)
 
 	// SetDescription and SetTopics push metadata to wherever the repository
-	// is hosted.
+	// is hosted. The runner calls them only with something to say.
 	SetDescription(ctx context.Context, descr string) error
 	SetTopics(ctx context.Context, topics []string) error
 }

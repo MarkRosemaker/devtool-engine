@@ -27,7 +27,9 @@ func TestRunnerUpdate(t *testing.T) {
 			}
 		}
 
-		res := (&Runner{}).Update(t.Context(), repo, Spec{Coverage: 90}, seq, nil)
+		spec := Spec{Coverage: 90, Description: "A thing.", Topics: []string{"go"}}
+
+		res := (&Runner{}).Update(t.Context(), repo, spec, seq, nil)
 
 		if res.Err != nil {
 			t.Fatal(res.Err)
@@ -113,7 +115,7 @@ func TestRunnerUpdate(t *testing.T) {
 			t.Fatal(res.Err)
 		}
 
-		want := "description,topics,reset,clean,pull,test"
+		want := "reset,clean,pull,test"
 		if got := strings.Join(repo.calls, ","); got != want {
 			t.Errorf("calls =\n  %s\nwant\n  %s", got, want)
 		}
@@ -358,6 +360,43 @@ func TestACommitIsReportedAsWhatItAmountedTo(t *testing.T) {
 
 			if !equal(pushed, tc.want) {
 				t.Errorf("the push event says %v, want %v", pushed, tc.want)
+			}
+		})
+	}
+}
+
+// TestEmptyMetadataIsLeftAlone: a spec with no description or topics has
+// nothing to say about them. Setting the empty value instead cleared whatever
+// was on GitHub, and since GitHub reports no description as null rather than
+// "", it also sent a request on every run for a repository that had none.
+func TestEmptyMetadataIsLeftAlone(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		spec Spec
+		want []string
+	}{
+		{"nothing to say", Spec{}, nil},
+		{"a description only", Spec{Description: "A thing."}, []string{"description"}},
+		{"topics only", Spec{Topics: []string{"go"}}, []string{"topics"}},
+		{"both", Spec{Description: "A thing.", Topics: []string{"go"}}, []string{"description", "topics"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &fakeRepo{}
+
+			if err := (&Runner{}).prepare(t.Context(), repo, tc.spec); err != nil {
+				t.Fatal(err)
+			}
+
+			var got []string
+
+			for _, call := range repo.calls {
+				if call == "description" || call == "topics" {
+					got = append(got, call)
+				}
+			}
+
+			if !equal(got, tc.want) {
+				t.Errorf("set %v, want %v", got, tc.want)
 			}
 		})
 	}
