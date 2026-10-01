@@ -334,13 +334,21 @@ func (r *Runner) update(
 
 // prepare gets the repository into a state where tasks can run: metadata in
 // sync, worktree clean, and up to date with the remote.
+//
+// A spec with no description or no topics has nothing to say about them, so
+// whatever the host holds is left as it is. Pushing the empty value instead
+// would clear a description somebody set by hand on every run.
 func (r *Runner) prepare(ctx context.Context, repo Repo, spec Spec) error {
-	if err := repo.SetDescription(ctx, spec.Description); err != nil {
-		return fmt.Errorf("setting description: %w", err)
+	if spec.Description != "" {
+		if err := repo.SetDescription(ctx, spec.Description); err != nil {
+			return fmt.Errorf("setting description: %w", err)
+		}
 	}
 
-	if err := repo.SetTopics(ctx, spec.Topics); err != nil {
-		return fmt.Errorf("setting topics: %w", err)
+	if len(spec.Topics) > 0 {
+		if err := repo.SetTopics(ctx, spec.Topics); err != nil {
+			return fmt.Errorf("setting topics: %w", err)
+		}
 	}
 
 	if err := discardLocalChanges(repo); err != nil {
