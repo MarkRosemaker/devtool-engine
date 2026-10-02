@@ -122,6 +122,29 @@ func Run[T any](
 	process func(ctx context.Context, key string) T,
 	onDone func(T),
 ) []T {
+	return RunReleasing(ctx, g,
+		func(ctx context.Context, key string, _ func()) T { return process(ctx, key) },
+		onDone)
+}
+
+// RunReleasing is [Run] for work that is done with, as far as what depends on
+// it is concerned, before it returns.
+//
+// process is handed release, which starts the keys waiting on this one there
+// and then rather than when process returns. A repository whose commits are
+// pushed has given its dependents all they need from it, and the coverage run
+// that follows is no reason for them to wait. Calling release more than once,
+// or not at all, is fine: a key releases its dependents when process returns
+// either way, and only the first release counts.
+//
+// onDone is called as process returns, as in Run, whether or not the key
+// released its dependents first.
+func RunReleasing[T any](
+	ctx context.Context,
+	g *Graph,
+	process func(ctx context.Context, key string, release func()) T,
+	onDone func(T),
+) []T {
 	remaining := make(map[string]int, len(g.inDegree))
 	maps.Copy(remaining, g.inDegree)
 
@@ -134,18 +157,10 @@ func Run[T any](
 	var start func(key string)
 
 	start = func(key string) {
-		wg.Go(func() {
-			result := process(ctx, key)
-
-			if onDone != nil {
-				onDone(result)
-			}
-
-			results <- result
-
-			// Unblocking dependents inside the lock, before this goroutine
-			// returns, is what keeps wg.Wait honest: every successor is
-			// registered with the group before its predecessor is done.
+		// Unblocking dependents inside the lock, while the key's own goroutine
+		// is still running, is what keeps wg.Wait honest: every successor is
+		// registered with the group before its predecessor is done.
+		release := sync.OnceFunc(func() {
 			mu.Lock()
 			defer mu.Unlock()
 
@@ -154,6 +169,18 @@ func Run[T any](
 					start(dependent)
 				}
 			}
+		})
+
+		wg.Go(func() {
+			result := process(ctx, key, release)
+
+			if onDone != nil {
+				onDone(result)
+			}
+
+			results <- result
+
+			release()
 		})
 	}
 

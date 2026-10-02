@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/MarkRosemaker/devtool-engine/depgraph"
 )
@@ -212,4 +213,117 @@ func started(t *testing.T, g *depgraph.Graph) []string {
 	t.Helper()
 
 	return order(t, g)
+}
+
+// TestRunReleasing: a key that releases its dependents lets them start while
+// it is still running, which is what lets a repository's dependents begin as
+// soon as its commits are pushed rather than after its coverage run.
+func TestRunReleasing(t *testing.T) {
+	t.Run("a dependent starts at the release, not the return", func(t *testing.T) {
+		g, err := depgraph.New([]string{"a/base", "a/top"},
+			map[string][]string{"a/top": {"a/base"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		topStarted := make(chan struct{})
+		overlapped := false
+
+		depgraph.RunReleasing(t.Context(), g,
+			func(_ context.Context, key string, release func()) string {
+				if key == "a/top" {
+					close(topStarted)
+
+					return key
+				}
+
+				release()
+
+				select {
+				case <-topStarted:
+					overlapped = true
+				case <-time.After(time.Second):
+				}
+
+				return key
+			}, nil)
+
+		if !overlapped {
+			t.Error("a/top did not start until a/base returned")
+		}
+	})
+
+	t.Run("a key waits for every dependency to release", func(t *testing.T) {
+		g, err := depgraph.New([]string{"a/left", "a/right", "a/top"},
+			map[string][]string{"a/top": {"a/left", "a/right"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var (
+			mu    sync.Mutex
+			order []string
+		)
+
+		note := func(s string) {
+			mu.Lock()
+			defer mu.Unlock()
+
+			order = append(order, s)
+		}
+
+		depgraph.RunReleasing(t.Context(), g,
+			func(_ context.Context, key string, release func()) string {
+				switch key {
+				case "a/left":
+					release()
+				case "a/right":
+					// Released only by returning, and a moment later.
+					time.Sleep(20 * time.Millisecond)
+					note("right returns")
+				case "a/top":
+					note("top starts")
+				}
+
+				return key
+			}, nil)
+
+		if want := []string{"right returns", "top starts"}; !slices.Equal(order, want) {
+			t.Errorf("got %v, want %v", order, want)
+		}
+	})
+
+	// Without the once, a second release would count as the other
+	// dependency's, and a/top would start before a/right was done.
+	t.Run("releasing twice counts once", func(t *testing.T) {
+		g, err := depgraph.New([]string{"a/left", "a/right", "a/top"},
+			map[string][]string{"a/top": {"a/left", "a/right"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var rightDone atomic.Bool
+
+		early := false
+
+		depgraph.RunReleasing(t.Context(), g,
+			func(_ context.Context, key string, release func()) string {
+				switch key {
+				case "a/left":
+					release()
+					release()
+				case "a/right":
+					time.Sleep(20 * time.Millisecond)
+					rightDone.Store(true)
+				case "a/top":
+					early = !rightDone.Load()
+				}
+
+				return key
+			}, nil)
+
+		if early {
+			t.Error("a/top started before a/right was done")
+		}
+	})
 }
