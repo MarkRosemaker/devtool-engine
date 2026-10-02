@@ -50,7 +50,7 @@ func TestRunnerUpdate(t *testing.T) {
 		// The order is the load-bearing part: metadata and a clean worktree
 		// first, a test before anything changes, then a test before each
 		// commit, and the push only once.
-		want := "description,topics,pull,test,test,commit,push,test"
+		want := "description,topics,pull,test,test,commit,push"
 		if got := strings.Join(repo.calls, ","); got != want {
 			t.Errorf("calls =\n  %s\nwant\n  %s", got, want)
 		}
@@ -122,11 +122,11 @@ func TestRunnerUpdate(t *testing.T) {
 	})
 }
 
-// TestRunnerTestsOnceWhenNothingChanges is the difference between one test run
-// per repository and two. A repository where no task committed is the same
-// code the run tested on its way in, so measuring coverage again would run the
-// whole suite to arrive at the figure already in hand — and most repositories
-// are quiet most runs.
+// TestRunnerTestsOnceWhenNothingChanges: the coverage figure is whatever the
+// suite last measured. A repository where no task committed is the same code
+// the run tested on its way in, and one where a task did was tested on its
+// final code before that commit — either way, running the suite again would
+// arrive at the figure already in hand.
 func TestRunnerTestsOnceWhenNothingChanges(t *testing.T) {
 	t.Run("nothing changed", func(t *testing.T) {
 		repo := &fakeRepo{coverage: 71.7}
@@ -148,14 +148,17 @@ func TestRunnerTestsOnceWhenNothingChanges(t *testing.T) {
 	})
 
 	// Something was committed, so the code at the end is not the code tested
-	// on the way in and the figure has to be measured again.
+	// on the way in. The task's own test ran on that code before its commit,
+	// so its figure is the one reported, and the suite does not run a third
+	// time after the push just to measure it again.
 	t.Run("something changed", func(t *testing.T) {
-		repo := &fakeRepo{coverage: 88.1}
+		repo := &fakeRepo{coverage: 71.7}
 
 		res := (&Runner{}).Update(t.Context(), repo, Spec{},
 			func(*Runner, Repo, Spec) []Task {
-				return []Task{{Name: "readme", Run: func(context.Context) error {
+				return []Task{{Name: "deps", Run: func(context.Context) error {
 					repo.dirty = true
+					repo.coverage = 88.1
 
 					return nil
 				}}}
@@ -164,9 +167,13 @@ func TestRunnerTestsOnceWhenNothingChanges(t *testing.T) {
 			t.Fatal(res.Err)
 		}
 
-		if n := strings.Count(strings.Join(repo.calls, ","), "test"); n != 3 {
-			t.Errorf("tested %d times, want 3 (in, after the task, at the end): %v",
+		if n := strings.Count(strings.Join(repo.calls, ","), "test"); n != 2 {
+			t.Errorf("tested %d times, want 2 (on the way in, and before the commit): %v",
 				n, repo.calls)
+		}
+
+		if res.Coverage != 88.1 {
+			t.Errorf("Coverage = %v, want 88.1, measured after the change", res.Coverage)
 		}
 	})
 }
@@ -258,8 +265,8 @@ func TestRunnerSkipsTestsForInertChanges(t *testing.T) {
 			t.Fatal(res.Err)
 		}
 
-		if n := strings.Count(strings.Join(repo.calls, ","), "test"); n != 3 {
-			t.Errorf("tested %d times, want 3: %v", n, repo.calls)
+		if n := strings.Count(strings.Join(repo.calls, ","), "test"); n != 2 {
+			t.Errorf("tested %d times, want 2: %v", n, repo.calls)
 		}
 	})
 
@@ -272,8 +279,8 @@ func TestRunnerSkipsTestsForInertChanges(t *testing.T) {
 			t.Fatal(res.Err)
 		}
 
-		if n := strings.Count(strings.Join(repo.calls, ","), "test"); n != 3 {
-			t.Errorf("tested %d times, want 3 — an unclaimed file could be embedded: %v",
+		if n := strings.Count(strings.Join(repo.calls, ","), "test"); n != 2 {
+			t.Errorf("tested %d times, want 2 — an unclaimed file could be embedded: %v",
 				n, repo.calls)
 		}
 	})
@@ -289,8 +296,8 @@ func TestRunnerSkipsTestsForInertChanges(t *testing.T) {
 			t.Fatal(res.Err)
 		}
 
-		if n := strings.Count(strings.Join(repo.calls, ","), "test"); n != 3 {
-			t.Errorf("tested %d times, want 3: %v", n, repo.calls)
+		if n := strings.Count(strings.Join(repo.calls, ","), "test"); n != 2 {
+			t.Errorf("tested %d times, want 2: %v", n, repo.calls)
 		}
 	})
 
@@ -303,8 +310,8 @@ func TestRunnerSkipsTestsForInertChanges(t *testing.T) {
 			t.Fatal(res.Err)
 		}
 
-		if n := strings.Count(strings.Join(repo.calls, ","), "test"); n != 3 {
-			t.Errorf("tested %d times, want 3: %v", n, repo.calls)
+		if n := strings.Count(strings.Join(repo.calls, ","), "test"); n != 2 {
+			t.Errorf("tested %d times, want 2: %v", n, repo.calls)
 		}
 	})
 }
