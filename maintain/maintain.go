@@ -94,7 +94,7 @@ type Sequence func(r *Runner, repo Repo, spec Spec) []Task
 type Runner struct {
 	// Inert reports that a change to this path cannot alter what the tests
 	// do, so a task that only touched such files need not be tested before it
-	// is committed and need not send the run back to measure coverage again.
+	// is committed, and leaves the coverage last measured standing.
 	//
 	// The caller supplies it because only the caller knows what it writes:
 	// a README, a Makefile and a set of documentation fragments are inert in
@@ -250,9 +250,8 @@ func (r *Runner) update(
 ) error {
 	tasks := seq(r, repo, spec)
 
-	// The four beyond the tasks: preparing, the test going in, the push and
-	// the test coming out.
-	st := &steps{events: events, repo: repo.String(), count: len(tasks) + 4}
+	// The three beyond the tasks: preparing, the test going in, and the push.
+	st := &steps{events: events, repo: repo.String(), count: len(tasks) + 3}
 
 	st.start("prepare")
 
@@ -273,19 +272,18 @@ func (r *Runner) update(
 
 	st.done("test")
 
-	// Whether anything committed could have moved the coverage figure. A run
-	// that only rewrote a README has not.
-	var moved bool
-
+	// The coverage figure follows the code: every task that changes something
+	// tests are sensitive to runs the suite before it commits, and the last of
+	// those ran on exactly the code that is pushed — anything committed after
+	// it touched only files the tests cannot see. So the latest measurement is
+	// the figure, and the run never tests again just to take it.
 	for _, task := range tasks {
-		committed, relevant, err := r.apply(ctx, repo, spec, task, st)
+		committed, err := r.apply(ctx, repo, spec, task, st, &coverage)
 		if err != nil {
 			return err
 		}
 
 		res.Commits = append(res.Commits, committed...)
-
-		moved = moved || relevant
 	}
 
 	st.start("push")
@@ -308,21 +306,6 @@ func (r *Runner) update(
 	// Not Committed: the push moved commits, it did not make one. RepoPushed
 	// above is what says it happened.
 	st.done("push")
-
-	// The figure measured on the way in still stands unless something
-	// committed could have moved it. A run that changed nothing, or changed
-	// only files the caller calls inert, has the same code it tested going in
-	// — and measuring again would run the whole suite to arrive at a number
-	// already in hand.
-	st.start("test")
-
-	if moved {
-		if coverage, err = r.TestCover(ctx, repo, spec); err != nil {
-			return st.failed("test", fmt.Errorf("measuring coverage: %w", err))
-		}
-	}
-
-	st.done("test")
 
 	res.Coverage = coverage
 
@@ -374,40 +357,39 @@ func (r *Runner) prepare(ctx context.Context, repo Repo, spec Spec) error {
 }
 
 // apply runs one task and commits what it changed, reporting what the commit
-// amounted to, or nothing where there was none.
+// amounted to, or nothing where there was none. Where it tests, it records the
+// coverage it measured in coverage.
 //
 // A task that leaves the worktree clean had nothing to do, which is the normal
 // case once a repository is in good shape.
 func (r *Runner) apply(
-	ctx context.Context, repo Repo, spec Spec, task Task, st *steps,
-) (committed []string, relevant bool, err error) {
+	ctx context.Context, repo Repo, spec Spec, task Task, st *steps, coverage *float64,
+) (committed []string, err error) {
 	st.start(task.label())
 
 	// Read before the task runs, so a commit can say which modules it moved.
 	goMod := readGoMod(repo.Fs())
 
 	if err := task.Run(ctx); err != nil {
-		return nil, false, st.failed(task.label(), fmt.Errorf("%s: %w", task.Name, err))
+		return nil, st.failed(task.label(), fmt.Errorf("%s: %w", task.Name, err))
 	}
 
 	files, err := repo.GetChangedFiles()
 	if err != nil {
-		return nil, false, st.failed(task.label(),
+		return nil, st.failed(task.label(),
 			fmt.Errorf("%s: getting changed files: %w", task.Name, err))
 	}
 
 	if len(files) == 0 {
 		st.done(task.label())
 
-		return nil, false, nil
+		return nil, nil
 	}
-
-	relevant = r.relevant(spec, files)
 
 	// Test before committing, so a task that breaks the build is reported
 	// against that task and its damage is never pushed. A task that rewrote
 	// only inert files has nothing to break.
-	if relevant {
+	if r.relevant(spec, files) {
 		// Announced within the task rather than as a step of its own: this is
 		// the whole suite, often the longest silence in a repository, and it
 		// happens because the task changed something rather than because the
@@ -416,16 +398,19 @@ func (r *Runner) apply(
 
 		st.within(testing)
 
-		if _, err := r.TestCover(ctx, repo, spec); err != nil {
-			return nil, false, st.failed(task.label(),
+		measured, err := r.TestCover(ctx, repo, spec)
+		if err != nil {
+			return nil, st.failed(task.label(),
 				fmt.Errorf("%s: testing after changes: %w", task.Name, err))
 		}
+
+		*coverage = measured
 
 		st.done(testing)
 	}
 
 	if err := repo.CommitAll(task.Name); err != nil {
-		return nil, false, st.failed(task.label(),
+		return nil, st.failed(task.label(),
 			fmt.Errorf("%s: committing: %w", task.Name, err))
 	}
 
@@ -434,7 +419,7 @@ func (r *Runner) apply(
 
 	st.committed(task.label(), collapseVendor(files), moduleChanges(goMod, readGoMod(repo.Fs())))
 
-	return task.describe(files), relevant, nil
+	return task.describe(files), nil
 }
 
 // relevant reports whether a set of changed files is worth testing over.
