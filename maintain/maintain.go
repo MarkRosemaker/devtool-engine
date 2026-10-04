@@ -400,8 +400,11 @@ func (r *Runner) apply(
 
 		measured, err := r.TestCover(ctx, repo, spec)
 		if err != nil {
-			return nil, st.failed(task.label(),
-				fmt.Errorf("%s: testing after changes: %w", task.Name, err))
+			// The changes are what to look at first, and the next run discards
+			// them, so the failure is the only place they are still told —
+			// ahead of the test output, which can run to hundreds of lines.
+			return nil, st.failed(task.label(), fmt.Errorf("%s: testing after changes:\n%s\n%w",
+				task.Name, describeChanges(files, moduleChanges(goMod, readGoMod(repo.Fs()))), err))
 		}
 
 		*coverage = measured

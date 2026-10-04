@@ -28,6 +28,10 @@ type fakeRepo struct {
 	// so a test can say which files a task touched and not only that it did.
 	changed []string
 
+	// testErr is what the tests report while the worktree is dirty, so a test
+	// can have a task's changes break them.
+	testErr error
+
 	// calls records every method with an effect, in the order it was called.
 	calls []string
 }
@@ -80,6 +84,10 @@ func (r *fakeRepo) IsGoRepo() (bool, error) { return true, nil }
 
 func (r *fakeRepo) GoTestCover(context.Context) (float64, error) {
 	r.record("test")
+
+	if r.dirty && r.testErr != nil {
+		return 0, r.testErr
+	}
 
 	return r.coverage, nil
 }

@@ -2,6 +2,8 @@ package maintain
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -144,4 +146,63 @@ func TestADependencyUpdateReportsVersions(t *testing.T) {
 	}
 
 	t.Fatal("no task_done for deps")
+}
+
+// TestABrokenTestSaysWhatChanged: when a step's changes fail the tests, the
+// failure is the only place they are still told — the next run discards them —
+// so it names the files and every module that moved, after the reason.
+func TestABrokenTestSaysWhatChanged(t *testing.T) {
+	repo := &fakeRepo{
+		changed: []string{"go.mod", "go.sum", "vendor/modules.txt", "vendor/github.com/moved/up/a.go"},
+		testErr: errors.New("--- FAIL: TestThing"),
+	}
+
+	if err := afero.WriteFile(repo.Fs(), goModPath, []byte(goModBefore), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	seq := func(*Runner, Repo, Spec) []Task {
+		return []Task{{Name: "update dependencies", Short: "deps", Run: func(context.Context) error {
+			repo.dirty = true
+
+			return afero.WriteFile(repo.Fs(), goModPath, []byte(goModAfter), 0o644)
+		}}}
+	}
+
+	res := (&Runner{}).Update(t.Context(), repo, Spec{}, seq, nil)
+	if res.Err == nil {
+		t.Fatal("the failing tests were not reported")
+	}
+
+	got := res.Err.Error()
+
+	// The changes come before the test output, which can be long enough to
+	// bury anything after it.
+	want := "update dependencies: testing after changes:\n" +
+		"changed: go.mod, go.sum, vendor/\n" +
+		"github.com/gone/away v0.3.0 (removed)\n" +
+		"github.com/moved/down v1.10.0 => v1.9.0\n" +
+		"github.com/moved/up v1.2.0 => v1.3.0\n" +
+		"github.com/new/one v0.1.0 (added)\n" +
+		"--- FAIL: TestThing"
+	if got != want {
+		t.Errorf("the failure says\n%s\nwant\n%s", got, want)
+	}
+
+	if !errors.Is(res.Err, repo.testErr) {
+		t.Error("the test failure is no longer wrapped")
+	}
+}
+
+func TestDescribeChangesCountsWhatItLeavesOut(t *testing.T) {
+	files := make([]string, 13)
+	for i := range files {
+		files[i] = fmt.Sprintf("f%02d.go", i)
+	}
+
+	got := describeChanges(files, nil)
+
+	if !strings.Contains(got, "f09.go and 3 more") || strings.Contains(got, "f10.go") {
+		t.Errorf("describeChanges = %q, want ten files named and three counted", got)
+	}
 }
