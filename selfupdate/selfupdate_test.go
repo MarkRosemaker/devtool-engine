@@ -266,3 +266,17 @@ func TestADirtyBuildIsLocalToo(t *testing.T) {
 		t.Errorf("Reason = %q, want it to say why", out.Reason)
 	}
 }
+
+// TestInstalledIsWhereGoInstallWrites: a caller restarting into the new
+// version needs the copy just written, not the first one PATH finds, which
+// may be the old build.
+func TestInstalledIsWhereGoInstallWrites(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GOBIN", dir)
+
+	u := &Updater{Module: "github.com/someone/tool"}
+
+	if got, want := u.installed(t.Context()), filepath.Join(dir, "tool"); got != want {
+		t.Errorf("installed() = %q, want %q", got, want)
+	}
+}

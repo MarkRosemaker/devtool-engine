@@ -80,6 +80,11 @@ type Outcome struct {
 	// Shadowed names a binary earlier on PATH than the one just installed, so
 	// a caller can say why an update appeared to do nothing. Empty otherwise.
 	Shadowed string
+
+	// Installed is where the new version was written, so a caller can run it
+	// rather than whatever PATH finds first. Empty when nothing was installed
+	// or the toolchain would not say where it installs to.
+	Installed string
 }
 
 // String describes the outcome in one line.
@@ -155,7 +160,8 @@ func (u *Updater) Update(ctx context.Context) (Outcome, error) {
 	}
 
 	out.Updated = true
-	out.Shadowed = u.shadowing(ctx)
+	out.Installed = u.installed(ctx)
+	out.Shadowed = u.shadowing(out.Installed)
 
 	return out, nil
 }
@@ -273,20 +279,29 @@ func prepend(list, module string) string {
 // first. An older build earlier on PATH makes a successful update look like it
 // did nothing at all, and that is a confusing afternoon unless somebody says
 // so out loud.
-func (u *Updater) shadowing(ctx context.Context) string {
-	name := u.Module[strings.LastIndex(u.Module, "/")+1:]
-
-	found, err := exec.LookPath(name)
-	if err != nil {
-		return ""
-	}
-
-	installed := filepath.Join(gobin(ctx), name)
-	if sameFile(found, installed) {
+func (u *Updater) shadowing(installed string) string {
+	found, err := exec.LookPath(u.name())
+	if err != nil || installed == "" || sameFile(found, installed) {
 		return ""
 	}
 
 	return found
+}
+
+// installed is where "go install" writes this module's binary, or "" where
+// the toolchain will not say.
+func (u *Updater) installed(ctx context.Context) string {
+	dir := gobin(ctx)
+	if dir == "" {
+		return ""
+	}
+
+	return filepath.Join(dir, u.name())
+}
+
+// name is the binary "go install" builds from the module.
+func (u *Updater) name() string {
+	return u.Module[strings.LastIndex(u.Module, "/")+1:]
 }
 
 // sameFile compares two paths by identity where it can and by name otherwise,
