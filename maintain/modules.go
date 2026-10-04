@@ -1,6 +1,7 @@
 package maintain
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -113,4 +114,41 @@ func collapseVendor(files []string) []string {
 	slices.Sort(out)
 
 	return out
+}
+
+// maxDescribedFiles is how many changed files a failure names before it counts
+// the rest: a reader needs to see where the change was, not every file in it.
+const maxDescribedFiles = 10
+
+// describeChanges says what a step changed, for a failure it caused: the files,
+// with vendor/ named once, and each requirement it moved, the way "go get -u"
+// reports them.
+func describeChanges(files []string, modules []event.ModuleChange) string {
+	files = collapseVendor(files)
+
+	var b strings.Builder
+
+	b.WriteString("changed: ")
+
+	if len(files) > maxDescribedFiles {
+		b.WriteString(strings.Join(files[:maxDescribedFiles], ", "))
+		fmt.Fprintf(&b, " and %d more", len(files)-maxDescribedFiles)
+	} else {
+		b.WriteString(strings.Join(files, ", "))
+	}
+
+	for _, m := range modules {
+		b.WriteString("\n")
+
+		switch {
+		case m.From == "":
+			b.WriteString(m.Path + " " + m.To + " (added)")
+		case m.To == "":
+			b.WriteString(m.Path + " " + m.From + " (removed)")
+		default:
+			b.WriteString(m.Path + " " + m.From + " => " + m.To)
+		}
+	}
+
+	return b.String()
 }
