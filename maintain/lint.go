@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/spf13/afero"
-	"golang.org/x/mod/modfile"
 )
 
 // GenLintfile returns a task that makes settings the repository's golangci-lint
@@ -37,21 +36,4 @@ func GenLintfile(repo Repo, settings []byte) Task {
 			return nil
 		},
 	}
-}
-
-// ModuleDeps returns the keys of the modules in byPath that requires depends on.
-//
-// It is how a repository's go.mod is turned into edges for a dependency graph:
-// byPath maps a module path to the key naming it, and anything not in there is
-// outside the set being maintained and cannot constrain the order.
-func ModuleDeps(requires []*modfile.Require, byPath map[string]string) []string {
-	var deps []string
-
-	for _, req := range requires {
-		if key, ok := byPath[req.Mod.Path]; ok {
-			deps = append(deps, key)
-		}
-	}
-
-	return deps
 }
