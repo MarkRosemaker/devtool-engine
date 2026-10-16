@@ -60,12 +60,18 @@ const (
 	// cloned before any of them is maintained. Task names the phase, and
 	// TaskIndex and TaskCount count what it has got through.
 	RunProgress Kind = "run_progress"
+
+	// Unmaintained says Repo requires a module from Dependency, a repository
+	// of an owner the run maintains that the run does not. Emitted while
+	// planning, once per pair, every run: each is a gap until the dependency
+	// is maintained too.
+	Unmaintained Kind = "unmaintained"
 )
 
 // kinds is every kind this package knows, which is what makes a line an event
 // rather than some other JSON object that happened to arrive.
 var kinds = []Kind{
-	RunStart, RunDone, RunProgress,
+	RunStart, RunDone, RunProgress, Unmaintained,
 	RepoStart, RepoDone, RepoPushed,
 	TaskStart, TaskDone,
 }
@@ -91,6 +97,10 @@ type Event struct {
 
 	// Repo is "owner/name", empty on the events that bracket a whole run.
 	Repo string `json:"repo,omitempty"`
+
+	// Dependency is the repository Repo requires and the run does not
+	// maintain, as "owner/name". Set on Unmaintained.
+	Dependency string `json:"dependency,omitempty"`
 
 	// Repos is every repository the run covers, as "owner/name", in the order
 	// they should be reported. Set on RunStart and nowhere else.

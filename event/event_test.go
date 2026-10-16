@@ -255,6 +255,7 @@ func TestRunStartCarriesEveryRepo(t *testing.T) {
 func TestRoundTrip(t *testing.T) {
 	want := []Event{
 		{Kind: RunStart, Repos: []string{"user/alpha", "user/beta"}},
+		{Kind: Unmaintained, Repo: "user/alpha", Dependency: "user/gamma"},
 		{Kind: RepoStart, Repo: "user/alpha"},
 		{Kind: TaskDone, Repo: "user/alpha", Task: "readme", Committed: true},
 		{
