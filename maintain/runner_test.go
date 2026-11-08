@@ -452,3 +452,44 @@ func TestRunnerCoverageFloor(t *testing.T) {
 		}
 	})
 }
+
+// A public repository below the coverage it needs fails every run; a private
+// one is not held to it.
+func TestRunnerPublicCoverage(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		private bool
+		cur     float64
+		fails   bool
+	}{
+		{"public and below fails", false, 63, true},
+		{"public and at it passes", false, 80, false},
+		{"private and below passes", true, 63, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &fakeRepo{coverage: tc.cur, private: tc.private}
+
+			// Already below last run too: this is not a fall, and still fails.
+			res := (&Runner{}).Update(t.Context(), repo, Spec{Coverage: tc.cur, PublicCoverage: 80},
+				func(*Runner, Repo, Spec) []Task { return nil }, nil)
+
+			if got := errors.Is(res.Err, ErrPublicCoverage); got != tc.fails {
+				t.Fatalf("Err = %v, want the shortfall reported: %v", res.Err, tc.fails)
+			}
+
+			if tc.fails && res.Err.Error() != "a public repository needs 80% coverage, and this has 63.0%" {
+				t.Errorf("Err = %q", res.Err)
+			}
+		})
+	}
+
+	t.Run("a public repository falling below reports both", func(t *testing.T) {
+		res := (&Runner{}).Update(t.Context(), &fakeRepo{coverage: 79},
+			Spec{Coverage: 84, CoverageFloor: 80, PublicCoverage: 80},
+			func(*Runner, Repo, Spec) []Task { return nil }, nil)
+
+		if !errors.Is(res.Err, ErrCoverageFell) || !errors.Is(res.Err, ErrPublicCoverage) {
+			t.Errorf("Err = %v, want both", res.Err)
+		}
+	})
+}
