@@ -16,18 +16,28 @@ import (
 // around the tasks.
 func noTasks(*Runner, Repo, Spec) []Task { return nil }
 
-// A repository with no Go module is given one, committed and pushed before
-// it is tested, so it exists on the remote as a module from the first run.
-func TestARepositoryWithoutAModuleIsGivenOne(t *testing.T) {
+// A repository with no Go module is given one, committed and pushed, and the
+// same run carries on to test it and lay down the rest, so development can
+// begin after one run.
+func TestARepositoryWithoutAModuleIsScaffoldedInOneRun(t *testing.T) {
 	repo := &fakeRepo{notGo: true}
 
-	res := (&Runner{}).Update(t.Context(), repo, Spec{}, noTasks, nil)
+	seq := func(*Runner, Repo, Spec) []Task {
+		return []Task{{Name: "licence", Run: func(context.Context) error { repo.dirty = true; return nil }}}
+	}
+
+	res := (&Runner{}).Update(t.Context(), repo, Spec{}, seq, nil)
 	if res.Err != nil {
 		t.Fatal(res.Err)
 	}
 
-	if got, want := strings.Join(repo.calls, ","), "pull,mod init,commit,push"; !strings.HasPrefix(got, want) {
-		t.Errorf("calls = %s, want them to start %s", got, want)
+	want := "pull,mod init,commit,push,test,test,commit,push"
+	if got := strings.Join(repo.calls, ","); got != want {
+		t.Errorf("calls =\n  %s\nwant\n  %s", got, want)
+	}
+
+	if want := []string{"licence"}; !equal(res.Commits, want) || !res.Pushed {
+		t.Errorf("Commits = %v, Pushed = %v, want the scaffolding committed and pushed", res.Commits, res.Pushed)
 	}
 }
 

@@ -111,8 +111,7 @@ type Runner struct {
 	// The caller supplies it because only the caller knows what it writes:
 	// a README, a Makefile and a set of documentation fragments are inert in
 	// most repositories and embedded in some. Left nil, nothing is inert and
-	// every change is tested, which is the safe reading and was the only one
-	// before this existed.
+	// every change is tested, which is the safe reading.
 	Inert func(path string) bool
 
 	// lint serialises everything that shells out to golangci-lint. The linter
@@ -388,7 +387,7 @@ func (r *Runner) prepare(ctx context.Context, repo Repo, spec Spec) error {
 	}
 
 	// A repository with no Go module yet cannot be linted or tested, so give it
-	// one and leave the rest to the next run.
+	// one and carry on: the same run lays down the rest of the scaffolding.
 	if ok, err := repo.IsGoRepo(); err != nil {
 		return fmt.Errorf("checking for a Go module: %w", err)
 	} else if !ok {
