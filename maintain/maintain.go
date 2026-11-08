@@ -14,6 +14,7 @@ package maintain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -30,6 +31,17 @@ type Spec struct {
 	// Coverage is the test coverage recorded by the previous run, used to
 	// report the change this run produced.
 	Coverage float64
+
+	// CoverageFloor, where set, is the coverage a repository has to stay at
+	// once it has reached it: a run that takes it from the floor or above to
+	// below fails with [ErrCoverageFell]. One that was below already is left
+	// to the caller, since failing every run on it reports nothing new.
+	CoverageFloor float64
+
+	// PublicCoverage, where set, is the coverage a public repository has to
+	// have: every run of one below it fails with [ErrPublicCoverage]. A
+	// private repository is not held to it.
+	PublicCoverage float64
 
 	// LintInTests marks a repository whose own test suite invokes the linter.
 	// Its tests then have to be serialised along with everything else that
@@ -155,6 +167,8 @@ func (r *Runner) Update(
 
 		slog.ErrorContext(ctx, "maintaining repository failed",
 			"repo", repo.String(), "error", err)
+	} else {
+		res.Err = coverageErr(repo, spec, res)
 	}
 
 	done := Event{
@@ -173,6 +187,37 @@ func (r *Runner) Update(
 	Emit(events, done)
 
 	return res
+}
+
+// ErrCoverageFell and ErrPublicCoverage mark a run whose coverage misses
+// [Spec.CoverageFloor] or [Spec.PublicCoverage]. Its work is done and pushed;
+// the failure is the report.
+var (
+	ErrCoverageFell   = errors.New("coverage fell below")
+	ErrPublicCoverage = errors.New("a public repository needs")
+)
+
+// coverageErr is what a run's coverage misses, nil where it misses nothing.
+func coverageErr(repo Repo, spec Spec, res Result) error {
+	var errs []error
+
+	if fell(spec.CoverageFloor, res.PrevCoverage, res.Coverage) {
+		errs = append(errs, fmt.Errorf("%w %g%%: %.1f%% → %.1f%%",
+			ErrCoverageFell, spec.CoverageFloor, res.PrevCoverage, res.Coverage))
+	}
+
+	if spec.PublicCoverage > 0 && !repo.Private() && res.Coverage < spec.PublicCoverage {
+		errs = append(errs, fmt.Errorf("%w %g%% coverage, and this has %.1f%%",
+			ErrPublicCoverage, spec.PublicCoverage, res.Coverage))
+	}
+
+	return errors.Join(errs...)
+}
+
+// fell reports whether coverage went from at or above floor to below it. A
+// previous figure of zero is none recorded, so nothing to fall from.
+func fell(floor, prev, cur float64) bool {
+	return floor > 0 && prev >= floor && cur < floor
 }
 
 // steps emits a repository's progress through its sequence.
