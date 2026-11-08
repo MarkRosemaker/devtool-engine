@@ -408,3 +408,47 @@ func TestEmptyMetadataIsLeftAlone(t *testing.T) {
 		})
 	}
 }
+
+// A run that takes coverage below the floor fails with its figures; one that
+// stays below, or never reached it, is left to the caller.
+func TestRunnerCoverageFloor(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		prev, cur float64
+		fails     bool
+	}{
+		{"falling below fails", 84.2, 79.6, true},
+		{"staying above passes", 84.2, 81, false},
+		{"landing on it passes", 84.2, 80, false},
+		{"staying below passes", 70, 65, false},
+		{"rising above passes", 70, 85, false},
+		{"none recorded before passes", 0, 50, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &fakeRepo{coverage: tc.cur}
+
+			res := (&Runner{}).Update(t.Context(), repo, Spec{Coverage: tc.prev, CoverageFloor: 80},
+				func(*Runner, Repo, Spec) []Task { return nil }, nil)
+
+			if got := errors.Is(res.Err, ErrCoverageFell); got != tc.fails {
+				t.Fatalf("Err = %v, want a fall reported: %v", res.Err, tc.fails)
+			}
+
+			if tc.fails && res.Err.Error() != "coverage fell below 80%: 84.2% → 79.6%" {
+				t.Errorf("Err = %q", res.Err)
+			}
+
+			if res.Coverage != tc.cur {
+				t.Errorf("Coverage = %v, want %v whether or not it fell", res.Coverage, tc.cur)
+			}
+		})
+	}
+
+	t.Run("no floor, no gate", func(t *testing.T) {
+		res := (&Runner{}).Update(t.Context(), &fakeRepo{coverage: 10}, Spec{Coverage: 90},
+			func(*Runner, Repo, Spec) []Task { return nil }, nil)
+		if res.Err != nil {
+			t.Errorf("Err = %v, want none without a floor", res.Err)
+		}
+	})
+}

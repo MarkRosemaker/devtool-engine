@@ -14,6 +14,7 @@ package maintain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -30,6 +31,12 @@ type Spec struct {
 	// Coverage is the test coverage recorded by the previous run, used to
 	// report the change this run produced.
 	Coverage float64
+
+	// CoverageFloor, where set, is the coverage a repository has to stay at
+	// once it has reached it: a run that takes it from the floor or above to
+	// below fails with [ErrCoverageFell]. One that was below already is left
+	// to the caller, since failing every run on it reports nothing new.
+	CoverageFloor float64
 
 	// LintInTests marks a repository whose own test suite invokes the linter.
 	// Its tests then have to be serialised along with everything else that
@@ -155,6 +162,9 @@ func (r *Runner) Update(
 
 		slog.ErrorContext(ctx, "maintaining repository failed",
 			"repo", repo.String(), "error", err)
+	} else if fell(spec.CoverageFloor, res.PrevCoverage, res.Coverage) {
+		res.Err = fmt.Errorf("%w %g%%: %.1f%% → %.1f%%",
+			ErrCoverageFell, spec.CoverageFloor, res.PrevCoverage, res.Coverage)
 	}
 
 	done := Event{
@@ -173,6 +183,16 @@ func (r *Runner) Update(
 	Emit(events, done)
 
 	return res
+}
+
+// ErrCoverageFell marks a run that took coverage below [Spec.CoverageFloor].
+// Its work is done and pushed; the failure is the report.
+var ErrCoverageFell = errors.New("coverage fell below")
+
+// fell reports whether coverage went from at or above floor to below it. A
+// previous figure of zero is none recorded, so nothing to fall from.
+func fell(floor, prev, cur float64) bool {
+	return floor > 0 && prev >= floor && cur < floor
 }
 
 // steps emits a repository's progress through its sequence.
