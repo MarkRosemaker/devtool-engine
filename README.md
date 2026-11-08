@@ -4,6 +4,7 @@
 ## Additional Information
 
 - [**Go Reference**](https://pkg.go.dev/github.com/MarkRosemaker/devtool-engine): API documentation.
+- [**Architecture**](docs/architecture.md): how the parts fit together.
 - [**Roadmap**](docs/roadmap.md): what is planned and not yet done.
 
 ## Contributing

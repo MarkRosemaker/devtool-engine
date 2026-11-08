@@ -376,3 +376,42 @@ func TestReadToleratesUnknownFields(t *testing.T) {
 		t.Errorf("got %+v, want the known fields read and the rest ignored", got)
 	}
 }
+
+// Emit stamps every event it passes on, through a plain function as through
+// any other emitter, and does nothing where there is no emitter at all.
+func TestEmitStampsAndToleratesNil(t *testing.T) {
+	Emit(nil, Event{Kind: RunStart}) // a caller that wants no reporting passes nil
+
+	var got []Event
+
+	before := time.Now()
+
+	Emit(EmitterFunc(func(ev Event) { got = append(got, ev) }), Event{Kind: RepoStart, Repo: "user/alpha"})
+
+	if len(got) != 1 || got[0].Repo != "user/alpha" {
+		t.Fatalf("got %+v, want the one event", got)
+	}
+
+	if got[0].Time.Before(before.Add(-time.Second)) || got[0].Time.Location() != time.UTC {
+		t.Errorf("Time = %v, want it stamped now, in UTC", got[0].Time)
+	}
+}
+
+// A line too long to read is a lost line, not a stray one, so it ends the
+// read with an error instead of being skipped: a table built from the events
+// before it would be quietly wrong.
+func TestReadFailsOnALineItCannotHold(t *testing.T) {
+	stream := `{"kind":"run_start"}` + "\n" +
+		`{"kind":"repo_done","repo":"user/alpha","err":"` + strings.Repeat("x", 2<<20) + `"}` + "\n"
+
+	var got []Event
+
+	err := Read(strings.NewReader(stream), func(ev Event) { got = append(got, ev) })
+	if err == nil {
+		t.Fatal("a line past the buffer was read as though nothing was lost")
+	}
+
+	if len(got) != 1 || got[0].Kind != RunStart {
+		t.Errorf("got %+v, want only the event before the lost line", got)
+	}
+}

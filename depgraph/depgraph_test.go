@@ -213,3 +213,18 @@ func started(t *testing.T, g *depgraph.Graph) []string {
 
 	return order(t, g)
 }
+
+// Keys is the graph's nodes in the order they were given, whatever the edges
+// say, so a caller can report in its own order.
+func TestKeysKeepTheGivenOrder(t *testing.T) {
+	keys := []string{"a/z", "a/y", "a/x"}
+
+	g, err := depgraph.New(keys, map[string][]string{"a/z": {"a/x"}, "a/y": {"a/x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := g.Keys(); !slices.Equal(got, keys) {
+		t.Errorf("Keys() = %v, want %v", got, keys)
+	}
+}

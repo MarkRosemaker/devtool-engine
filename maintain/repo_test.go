@@ -34,6 +34,15 @@ type fakeRepo struct {
 
 	// calls records every method with an effect, in the order it was called.
 	calls []string
+
+	// fail makes the call of that name fail with its error, after recording it.
+	fail map[string]error
+
+	// notGo says the repository has no Go module yet.
+	notGo bool
+
+	// stuck says a reset leaves the worktree as dirty as it found it.
+	stuck bool
 }
 
 func (r *fakeRepo) Owner() string  { return "user" }
@@ -51,36 +60,54 @@ func (r *fakeRepo) Fs() afero.Fs {
 
 func (r *fakeRepo) record(name string) { r.calls = append(r.calls, name) }
 
+// call records name and returns the error it is set to fail with, if any.
+func (r *fakeRepo) call(name string) error {
+	r.record(name)
+
+	return r.fail[name]
+}
+
 func (r *fakeRepo) ExecCommand(_ context.Context, name string, _ ...string) ([]byte, error) {
 	r.record("exec " + name)
 
 	return nil, nil
 }
 
-func (r *fakeRepo) Pull(context.Context) error { r.record("pull"); return nil }
-func (r *fakeRepo) Push(context.Context) error { r.record("push"); return nil }
+func (r *fakeRepo) Pull(context.Context) error { return r.call("pull") }
+func (r *fakeRepo) Push(context.Context) error { return r.call("push") }
 func (r *fakeRepo) CommitAll(string) error {
-	r.record("commit")
+	if err := r.call("commit"); err != nil {
+		return err
+	}
+
 	r.dirty = false
 
 	return nil
 }
 
 func (r *fakeRepo) HardReset() error {
-	r.record("reset")
-	r.dirty = false
+	if err := r.call("reset"); err != nil {
+		return err
+	}
+
+	r.dirty = r.dirty && r.stuck
 
 	return nil
 }
 
-func (r *fakeRepo) Clean() error { r.record("clean"); return nil }
+func (r *fakeRepo) Clean() error { return r.call("clean") }
 func (r *fakeRepo) GoModInit(context.Context) error {
-	r.record("mod init")
+	if err := r.call("mod init"); err != nil {
+		return err
+	}
+
+	r.dirty = true
+	r.notGo = false
 
 	return nil
 }
 
-func (r *fakeRepo) IsGoRepo() (bool, error) { return true, nil }
+func (r *fakeRepo) IsGoRepo() (bool, error) { return !r.notGo, r.fail["is go"] }
 
 func (r *fakeRepo) GoTestCover(context.Context) (float64, error) {
 	r.record("test")
@@ -93,15 +120,11 @@ func (r *fakeRepo) GoTestCover(context.Context) (float64, error) {
 }
 
 func (r *fakeRepo) SetDescription(context.Context, string) error {
-	r.record("description")
-
-	return nil
+	return r.call("description")
 }
 
 func (r *fakeRepo) SetTopics(context.Context, []string) error {
-	r.record("topics")
-
-	return nil
+	return r.call("topics")
 }
 
 // GetChangedFiles is what the runner reads to decide whether a task did

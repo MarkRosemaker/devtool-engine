@@ -48,28 +48,3 @@ to whoever reads a `go.mod`.
 `maintain` keeps an alias for every name that moved to `event`, so a consumer
 that has not moved yet goes on compiling. Once nothing imports them, they go.
 
-## Notes on selfupdate, checked rather than assumed
-
-Not work to do, but the properties the design rests on, so a change that breaks
-one is a change to reconsider:
-
-- **No tags needed.** An untagged module resolves to a pseudo-version naming
-  the commit.
-- **Private modules work.** It shells out to `go list -m` rather than writing a
-  proxy request by hand, so whatever `GOPROXY`, `GOPRIVATE` and git credentials
-  the machine already has are the ones that apply.
-- **The question is asked from outside any module.** Inside one that vendors
-  its dependencies the toolchain refuses it — "cannot query module due to
-  `-mod=vendor`" — and that is exactly where self-update gets run, from the
-  repository somebody is working in. Every repository this tool maintains
-  vendors. `go install pkg@version` is not affected; it ignores the current
-  module by design.
-- **The proxy caches.** Fifty minutes after a push, `proxy.golang.org` was
-  still naming the commit before it, while a direct query named the right one.
-  `Updater.Direct` skips the proxy, and wants setting wherever a change is
-  meant to take effect promptly — which is the whole point of the split.
-
-It also refuses to replace a local build — either shape the toolchain stamps:
-`(devel)` where there is no version information at all, and the commit it was
-built from plus `+dirty` where it came from a worktree. It reports when an older
-copy earlier on `PATH` will shadow what it just installed.
