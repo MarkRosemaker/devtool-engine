@@ -180,10 +180,10 @@ func TestABrokenTestSaysWhatChanged(t *testing.T) {
 	// bury anything after it.
 	want := "update dependencies: testing after changes:\n" +
 		"changed: go.mod, go.sum, vendor/\n" +
-		"github.com/gone/away v0.3.0 (removed)\n" +
-		"github.com/moved/down v1.10.0 => v1.9.0\n" +
-		"github.com/moved/up v1.2.0 => v1.3.0\n" +
-		"github.com/new/one v0.1.0 (added)\n" +
+		"gone/away v0.3.0 (removed)\n" +
+		"moved/down v1.10.0 => v1.9.0\n" +
+		"moved/up v1.2.0 => v1.3.0\n" +
+		"new/one v0.1.0 (added)\n" +
 		"--- FAIL: TestThing"
 	if got != want {
 		t.Errorf("the failure says\n%s\nwant\n%s", got, want)
