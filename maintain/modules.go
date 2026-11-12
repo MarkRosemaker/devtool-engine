@@ -121,8 +121,8 @@ func collapseVendor(files []string) []string {
 const maxDescribedFiles = 10
 
 // describeChanges says what a step changed, for a failure it caused: the files,
-// with vendor/ named once, and each requirement it moved, the way "go get -u"
-// reports them.
+// with vendor/ named once, and each requirement it moved, as
+// [event.ModuleChange] reads.
 func describeChanges(files []string, modules []event.ModuleChange) string {
 	files = collapseVendor(files)
 
@@ -138,16 +138,7 @@ func describeChanges(files []string, modules []event.ModuleChange) string {
 	}
 
 	for _, m := range modules {
-		b.WriteString("\n")
-
-		switch {
-		case m.From == "":
-			b.WriteString(m.Path + " " + m.To + " (added)")
-		case m.To == "":
-			b.WriteString(m.Path + " " + m.From + " (removed)")
-		default:
-			b.WriteString(m.Path + " " + m.From + " => " + m.To)
-		}
+		b.WriteString("\n" + m.String())
 	}
 
 	return b.String()
