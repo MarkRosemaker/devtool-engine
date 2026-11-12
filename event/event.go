@@ -66,6 +66,14 @@ const (
 	// planning, once per pair, every run: each is a gap until the dependency
 	// is maintained too.
 	Unmaintained Kind = "unmaintained"
+
+	// IssueFiled says the run reported a problem with Repo as the issue at
+	// Issue, titled Title: opened, or brought up to date where it was open
+	// already. IssueClosed says the run found the problem in that issue gone,
+	// and closed it. Both follow the repository's RepoDone, whose Err the
+	// filed issue is about.
+	IssueFiled  Kind = "issue_filed"
+	IssueClosed Kind = "issue_closed"
 )
 
 // kinds is every kind this package knows, which is what makes a line an event
@@ -74,6 +82,7 @@ var kinds = []Kind{
 	RunStart, RunDone, RunProgress, Unmaintained,
 	RepoStart, RepoDone, RepoPushed,
 	TaskStart, TaskDone,
+	IssueFiled, IssueClosed,
 }
 
 // Valid reports whether k is a kind this package knows.
@@ -154,6 +163,11 @@ type Event struct {
 	// than an error, because this crosses a process boundary: what survives
 	// the trip is the message.
 	Err string `json:"err,omitempty"`
+
+	// Issue is the issue's address on GitHub and Title its title, set on
+	// IssueFiled and IssueClosed.
+	Issue string `json:"issue,omitempty"`
+	Title string `json:"title,omitempty"`
 }
 
 // ModuleChange is one requirement a commit moved.

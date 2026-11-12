@@ -38,6 +38,27 @@ func TestRemoteErrorKeepsItsMessage(t *testing.T) {
 	}
 }
 
+// An issue event crosses the wire whole: its kind is one Read accepts, and
+// the issue's address and title arrive with it.
+func TestIssueEventsAreRead(t *testing.T) {
+	const stream = `{"kind":"issue_filed","repo":"o/n","issue":"https://github.com/o/n/issues/7","title":"Tests fail on main: TestX"}` + "\n" +
+		`{"kind":"issue_closed","repo":"o/n","issue":"https://github.com/o/n/issues/6","title":"Coverage fell below 80%"}` + "\n"
+
+	var got []Event
+
+	if err := Read(strings.NewReader(stream), func(ev Event) { got = append(got, ev) }); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []Event{
+		{Kind: IssueFiled, Repo: "o/n", Issue: "https://github.com/o/n/issues/7", Title: "Tests fail on main: TestX"},
+		{Kind: IssueClosed, Repo: "o/n", Issue: "https://github.com/o/n/issues/6", Title: "Coverage fell below 80%"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("read %+v\nwant %+v", got, want)
+	}
+}
+
 // TestReadSkipsWhatIsNotAnEvent: the events on either side of a stray line
 // still arrive. A run that went perfectly well should not lose its report
 // because something else wrote one line to the stream.
