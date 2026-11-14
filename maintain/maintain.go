@@ -454,6 +454,14 @@ func (r *Runner) apply(
 		*coverage = measured
 
 		st.done(testing)
+
+		// Testing can change files too, as when a test step settles the
+		// module files before trying again, and the commit takes those with
+		// the rest, so it names them.
+		if files, err = repo.GetChangedFiles(); err != nil {
+			return nil, st.failed(task.label(),
+				fmt.Errorf("%s: getting changed files after testing: %w", task.Name, err))
+		}
 	}
 
 	if err := repo.CommitAll(task.Name); err != nil {

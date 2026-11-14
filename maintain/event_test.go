@@ -196,6 +196,40 @@ func TestRunnerEmitsEvents(t *testing.T) {
 		}
 	})
 
+	// Testing after a task can change files too, and the commit takes them
+	// with the rest, so it names them.
+	t.Run("a commit names what testing changed", func(t *testing.T) {
+		repo := &fakeRepo{changed: []string{"client_test.go"}}
+		rec := &recorder{}
+
+		seq := func(*Runner, Repo, Spec) []Task {
+			return []Task{{Name: "go generate", Short: "generate", Run: func(context.Context) error {
+				repo.dirty = true
+				repo.onTest = func() {
+					repo.changed = []string{"client_test.go", "go.mod", "vendor/modules.txt"}
+				}
+
+				return nil
+			}}}
+		}
+
+		if res := (&Runner{}).Update(t.Context(), repo, Spec{}, seq, rec); res.Err != nil {
+			t.Fatal(res.Err)
+		}
+
+		var got []string
+
+		for _, ev := range rec.events {
+			if ev.Kind == TaskDone && ev.Committed {
+				got = ev.Files
+			}
+		}
+
+		if got, want := strings.Join(got, ","), "client_test.go,go.mod,vendor/"; got != want {
+			t.Errorf("generate committed %q, want %q", got, want)
+		}
+	})
+
 	t.Run("a failure is reported on RepoDone as text", func(t *testing.T) {
 		rec := &recorder{}
 		boom := errors.New("boom")

@@ -32,6 +32,9 @@ type fakeRepo struct {
 	// can have a task's changes break them.
 	testErr error
 
+	// onTest runs while the tests do, so a test can have testing change files.
+	onTest func()
+
 	// calls records every method with an effect, in the order it was called.
 	calls []string
 
@@ -111,6 +114,10 @@ func (r *fakeRepo) IsGoRepo() (bool, error) { return !r.notGo, r.fail["is go"] }
 
 func (r *fakeRepo) GoTestCover(context.Context) (float64, error) {
 	r.record("test")
+
+	if r.onTest != nil {
+		r.onTest()
+	}
 
 	if r.dirty && r.testErr != nil {
 		return 0, r.testErr
